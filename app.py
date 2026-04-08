@@ -476,6 +476,7 @@ def main() -> None:
         return
 
     alunos, meta = load_data()
+    df_inep = load_inep_data()
 
     ano_col = meta["ano"]
     uf_col = meta["uf"]
@@ -486,30 +487,108 @@ def main() -> None:
     ing_col = meta["ingressantes"]
     rec_col = "receita_total_estimada"
 
+    with st.sidebar:
+        st.header("Filtros")
+
+        st.subheader("V-Educa")
+        anos = st.multiselect("Ano", options_for(alunos, ano_col), default=[TODOS], key="vedu_anos")
+        ufs = st.multiselect("UF", options_for(alunos, uf_col), default=[TODOS], key="vedu_ufs")
+        areas = st.multiselect("Area", options_for(alunos, area_col), default=[TODOS], key="vedu_areas")
+        cursos = st.multiselect("Curso", options_for(alunos, curso_col), default=[TODOS], key="vedu_cursos")
+        modalidades = st.multiselect("Modalidade", options_for(alunos, modal_col), default=[TODOS], key="vedu_modalidades")
+
+        visao = st.selectbox(
+            "Eixo X",
+            options=[curso_col, area_col, uf_col],
+            format_func=lambda c: axis_label(c, curso_col, area_col),
+            key="vedu_visao",
+        )
+        metrica = st.selectbox(
+            "Metrica",
+            options=[mat_col, ing_col, rec_col],
+            format_func=lambda c: metric_label(c, mat_col, ing_col),
+            key="vedu_metrica",
+        )
+        topn = st.slider("Top N", min_value=5, max_value=40, value=15, step=1, key="vedu_topn")
+
+        st.divider()
+        st.subheader("INEP")
+
+        available_metrics = [c for c in INEP_NUMERIC_COLS if c in df_inep.columns] if not df_inep.empty else []
+        available_dims = [
+            c
+            for c in [
+                "NO_REGIAO",
+                "SG_UF",
+                "NO_IES",
+                "TP_MODALIDADE_ENSINO",
+                "TP_CATEGORIA_ADMINISTRATIVA",
+                "TP_REDE",
+                "NO_CINE_AREA_GERAL",
+                "NO_CINE_ROTULO",
+            ]
+            if c in df_inep.columns
+        ] if not df_inep.empty else []
+
+        if available_metrics and available_dims:
+            inep_metric = st.selectbox(
+                "Metrica (INEP)",
+                options=available_metrics,
+                format_func=inep_metric_label,
+                index=available_metrics.index("QT_MAT") if "QT_MAT" in available_metrics else 0,
+                key="inep_metric",
+            )
+            inep_dim = st.selectbox(
+                "Dimensao (Eixo X)",
+                options=available_dims,
+                format_func=inep_dim_label,
+                index=available_dims.index("NO_REGIAO") if "NO_REGIAO" in available_dims else 0,
+                key="inep_dim",
+            )
+            inep_topn = st.slider("Top N (INEP)", min_value=5, max_value=40, value=15, step=1, key="inep_topn")
+
+            anos_sel = []
+            if "NU_ANO_CENSO" in df_inep.columns:
+                anos_inep = sorted([int(v) for v in df_inep["NU_ANO_CENSO"].dropna().unique().tolist()])
+                anos_sel = st.multiselect("Ano (INEP)", anos_inep, default=anos_inep[-1:] if anos_inep else [], key="inep_anos")
+
+            regs_sel = []
+            if "NO_REGIAO" in df_inep.columns:
+                regs = sorted([str(v) for v in df_inep["NO_REGIAO"].dropna().unique().tolist()])
+                regs_sel = st.multiselect("Regiao (INEP)", regs, default=[], key="inep_regs")
+
+            ufs_sel = []
+            if "SG_UF" in df_inep.columns:
+                ufs_inep = sorted([str(v) for v in df_inep["SG_UF"].dropna().unique().tolist()])
+                ufs_sel = st.multiselect("UF (INEP)", ufs_inep, default=[], key="inep_ufs")
+
+            modal_sel_values = []
+            if "TP_MODALIDADE_ENSINO" in df_inep.columns:
+                modal_vals = sorted([int(v) for v in df_inep["TP_MODALIDADE_ENSINO"].dropna().unique().tolist()])
+                modal_opts = [(inep_value_label("TP_MODALIDADE_ENSINO", v), v) for v in modal_vals]
+                modal_labels_default = [label for label, _ in modal_opts]
+                modal_sel_labels = st.multiselect(
+                    "Modalidade (INEP)",
+                    [label for label, _ in modal_opts],
+                    default=modal_labels_default,
+                    key="inep_modalidade",
+                )
+                map_back = {label: value for label, value in modal_opts}
+                modal_sel_values = [map_back[label] for label in modal_sel_labels]
+        else:
+            st.info("INEP indisponivel: arquivo/campos nao encontrados.")
+            inep_metric = "QT_MAT"
+            inep_dim = "NO_REGIAO"
+            inep_topn = 15
+            anos_sel = []
+            regs_sel = []
+            ufs_sel = []
+            modal_sel_values = []
+
     app_tab1, app_tab2 = st.tabs(["V-Educa", "INEP Cursos"])
 
     with app_tab1:
         st.subheader("Painel V-Educa")
-        with st.expander("Filtros V-Educa", expanded=True):
-            anos = st.multiselect("Ano", options_for(alunos, ano_col), default=[TODOS], key="vedu_anos")
-            ufs = st.multiselect("UF", options_for(alunos, uf_col), default=[TODOS], key="vedu_ufs")
-            areas = st.multiselect("Area", options_for(alunos, area_col), default=[TODOS], key="vedu_areas")
-            cursos = st.multiselect("Curso", options_for(alunos, curso_col), default=[TODOS], key="vedu_cursos")
-            modalidades = st.multiselect("Modalidade", options_for(alunos, modal_col), default=[TODOS], key="vedu_modalidades")
-
-            visao = st.selectbox(
-                "Eixo X",
-                options=[curso_col, area_col, uf_col],
-                format_func=lambda c: axis_label(c, curso_col, area_col),
-                key="vedu_visao",
-            )
-            metrica = st.selectbox(
-                "Metrica",
-                options=[mat_col, ing_col, rec_col],
-                format_func=lambda c: metric_label(c, mat_col, ing_col),
-                key="vedu_metrica",
-            )
-            topn = st.slider("Top N", min_value=5, max_value=40, value=15, step=1, key="vedu_topn")
 
         f = alunos.copy()
         f = apply_filter(f, ano_col, anos)
@@ -612,79 +691,19 @@ def main() -> None:
 
     with app_tab2:
         st.subheader("Microdados INEP 2024 - Cadastro de Cursos")
-        df_inep = load_inep_data()
         if df_inep.empty:
             st.warning("Arquivos INEP nao encontrados. Adicione MICRODADOS_CADASTRO_CURSOS_2024_SLIM.csv ou MICRODADOS_CADASTRO_CURSOS_2024.CSV na raiz do projeto.")
             return
 
-        available_metrics = [c for c in INEP_NUMERIC_COLS if c in df_inep.columns]
-        available_dims = [
-            c
-            for c in [
-                "NO_REGIAO",
-                "SG_UF",
-                "NO_IES",
-                "TP_MODALIDADE_ENSINO",
-                "TP_CATEGORIA_ADMINISTRATIVA",
-                "TP_REDE",
-                "NO_CINE_AREA_GERAL",
-                "NO_CINE_ROTULO",
-            ]
-            if c in df_inep.columns
-        ]
-        if not available_metrics or not available_dims:
-            st.warning("Nao ha colunas suficientes para montar o painel INEP.")
-            return
-
-        c_a, c_b, c_c = st.columns([2, 2, 1])
-        with c_a:
-            inep_metric = st.selectbox(
-                "Metrica (INEP)",
-                options=available_metrics,
-                format_func=inep_metric_label,
-                index=available_metrics.index("QT_MAT") if "QT_MAT" in available_metrics else 0,
-            )
-        with c_b:
-            inep_dim = st.selectbox(
-                "Dimensao (Eixo X)",
-                options=available_dims,
-                format_func=inep_dim_label,
-                index=available_dims.index("NO_REGIAO") if "NO_REGIAO" in available_dims else 0,
-            )
-        with c_c:
-            inep_topn = st.slider("Top N", min_value=5, max_value=40, value=15, step=1, key="inep_topn")
-
         f_inep = df_inep.copy()
-
-        f1, f2, f3, f4 = st.columns(4)
-        with f1:
-            if "NU_ANO_CENSO" in f_inep.columns:
-                anos = sorted([int(v) for v in f_inep["NU_ANO_CENSO"].dropna().unique().tolist()])
-                anos_sel = st.multiselect("Ano", anos, default=anos[-1:] if anos else [])
-                if anos_sel:
-                    f_inep = f_inep[f_inep["NU_ANO_CENSO"].isin(anos_sel)]
-        with f2:
-            if "NO_REGIAO" in f_inep.columns:
-                regs = sorted([str(v) for v in f_inep["NO_REGIAO"].dropna().unique().tolist()])
-                regs_sel = st.multiselect("Regiao", regs, default=[])
-                if regs_sel:
-                    f_inep = f_inep[f_inep["NO_REGIAO"].astype(str).isin(regs_sel)]
-        with f3:
-            if "SG_UF" in f_inep.columns:
-                ufs_inep = sorted([str(v) for v in f_inep["SG_UF"].dropna().unique().tolist()])
-                ufs_sel = st.multiselect("UF", ufs_inep, default=[])
-                if ufs_sel:
-                    f_inep = f_inep[f_inep["SG_UF"].astype(str).isin(ufs_sel)]
-        with f4:
-            if "TP_MODALIDADE_ENSINO" in f_inep.columns:
-                modal_vals = sorted([int(v) for v in f_inep["TP_MODALIDADE_ENSINO"].dropna().unique().tolist()])
-                modal_opts = [(inep_value_label("TP_MODALIDADE_ENSINO", v), v) for v in modal_vals]
-                modal_labels_default = [label for label, _ in modal_opts]
-                modal_sel_labels = st.multiselect("Modalidade", [label for label, _ in modal_opts], default=modal_labels_default)
-                map_back = {label: value for label, value in modal_opts}
-                modal_sel_values = [map_back[label] for label in modal_sel_labels]
-                if modal_sel_values:
-                    f_inep = f_inep[f_inep["TP_MODALIDADE_ENSINO"].isin(modal_sel_values)]
+        if anos_sel:
+            f_inep = f_inep[f_inep["NU_ANO_CENSO"].isin(anos_sel)]
+        if regs_sel:
+            f_inep = f_inep[f_inep["NO_REGIAO"].astype(str).isin(regs_sel)]
+        if ufs_sel:
+            f_inep = f_inep[f_inep["SG_UF"].astype(str).isin(ufs_sel)]
+        if modal_sel_values:
+            f_inep = f_inep[f_inep["TP_MODALIDADE_ENSINO"].isin(modal_sel_values)]
 
         if f_inep.empty:
             st.warning("Sem dados para os filtros selecionados no painel INEP.")
