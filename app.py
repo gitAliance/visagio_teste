@@ -52,6 +52,7 @@ INEP_NUMERIC_COLS = [
     "QT_CONC",
 ]
 INEP_COL_LABELS = {
+    "NU_ANO_CENSO": "Ano do censo",
     "NO_REGIAO": "Regiao",
     "SG_UF": "UF",
     "NO_IES": "IES",
@@ -264,6 +265,12 @@ def inep_value_label(col: str, value: object) -> str:
         txt = INEP_CATEGORIA_LABELS.get(key, str(key))
         return f"{txt} ({key})"
     return str(value)
+
+
+def inep_filter_option_pairs(df: pd.DataFrame, col: str) -> list[tuple[str, object]]:
+    vals = [v for v in df[col].dropna().unique().tolist()]
+    vals = sorted(vals, key=lambda x: str(x))
+    return [(inep_value_label(col, v), v) for v in vals]
 
 
 def axis_label(x_col: str, curso_col: str, area_col: str) -> str:
@@ -547,43 +554,45 @@ def main() -> None:
             )
             inep_topn = st.slider("Top N (INEP)", min_value=5, max_value=40, value=15, step=1, key="inep_topn")
 
-            anos_sel = []
-            if "NU_ANO_CENSO" in df_inep.columns:
-                anos_inep = sorted([int(v) for v in df_inep["NU_ANO_CENSO"].dropna().unique().tolist()])
-                anos_sel = st.multiselect("Ano (INEP)", anos_inep, default=anos_inep[-1:] if anos_inep else [], key="inep_anos")
+            inep_filterable_dims = ["NU_ANO_CENSO", *available_dims]
+            inep_filterable_dims = [c for c in inep_filterable_dims if c in df_inep.columns]
+            default_dyn_dims = [
+                c
+                for c in ["NU_ANO_CENSO", "NO_REGIAO", "SG_UF", "NO_CINE_AREA_GERAL"]
+                if c in inep_filterable_dims
+            ]
 
-            regs_sel = []
-            if "NO_REGIAO" in df_inep.columns:
-                regs = sorted([str(v) for v in df_inep["NO_REGIAO"].dropna().unique().tolist()])
-                regs_sel = st.multiselect("Regiao (INEP)", regs, default=[], key="inep_regs")
+            inep_dyn_dims = st.multiselect(
+                "Filtros dinamicos (INEP)",
+                options=inep_filterable_dims,
+                default=default_dyn_dims,
+                format_func=inep_dim_label,
+                key="inep_dyn_dims",
+                help="Escolha as dimensoes para filtrar dinamicamente. Exemplo: Area CINE.",
+            )
 
-            ufs_sel = []
-            if "SG_UF" in df_inep.columns:
-                ufs_inep = sorted([str(v) for v in df_inep["SG_UF"].dropna().unique().tolist()])
-                ufs_sel = st.multiselect("UF (INEP)", ufs_inep, default=[], key="inep_ufs")
+            inep_dynamic_filters: dict[str, list[object]] = {}
+            for dim_col in inep_dyn_dims:
+                option_pairs = inep_filter_option_pairs(df_inep, dim_col)
+                option_labels = [label for label, _ in option_pairs]
 
-            modal_sel_values = []
-            if "TP_MODALIDADE_ENSINO" in df_inep.columns:
-                modal_vals = sorted([int(v) for v in df_inep["TP_MODALIDADE_ENSINO"].dropna().unique().tolist()])
-                modal_opts = [(inep_value_label("TP_MODALIDADE_ENSINO", v), v) for v in modal_vals]
-                modal_labels_default = [label for label, _ in modal_opts]
-                modal_sel_labels = st.multiselect(
-                    "Modalidade (INEP)",
-                    [label for label, _ in modal_opts],
-                    default=modal_labels_default,
-                    key="inep_modalidade",
+                selected_labels = st.multiselect(
+                    f"{inep_dim_label(dim_col)} (INEP)",
+                    options=option_labels,
+                    default=[],
+                    key=f"inep_dyn_vals_{dim_col}",
                 )
-                map_back = {label: value for label, value in modal_opts}
-                modal_sel_values = [map_back[label] for label in modal_sel_labels]
+
+                label_to_value = {label: value for label, value in option_pairs}
+                selected_values = [label_to_value[label] for label in selected_labels if label in label_to_value]
+                if selected_values:
+                    inep_dynamic_filters[dim_col] = selected_values
         else:
             st.info("INEP indisponivel: arquivo/campos nao encontrados.")
             inep_metric = "QT_MAT"
             inep_dim = "NO_REGIAO"
             inep_topn = 15
-            anos_sel = []
-            regs_sel = []
-            ufs_sel = []
-            modal_sel_values = []
+            inep_dynamic_filters = {}
 
     app_tab1, app_tab2 = st.tabs(["V-Educa", "INEP Cursos"])
 
@@ -696,14 +705,8 @@ def main() -> None:
             return
 
         f_inep = df_inep.copy()
-        if anos_sel:
-            f_inep = f_inep[f_inep["NU_ANO_CENSO"].isin(anos_sel)]
-        if regs_sel:
-            f_inep = f_inep[f_inep["NO_REGIAO"].astype(str).isin(regs_sel)]
-        if ufs_sel:
-            f_inep = f_inep[f_inep["SG_UF"].astype(str).isin(ufs_sel)]
-        if modal_sel_values:
-            f_inep = f_inep[f_inep["TP_MODALIDADE_ENSINO"].isin(modal_sel_values)]
+        for dim_col, selected_values in inep_dynamic_filters.items():
+            f_inep = f_inep[f_inep[dim_col].isin(selected_values)]
 
         if f_inep.empty:
             st.warning("Sem dados para os filtros selecionados no painel INEP.")
