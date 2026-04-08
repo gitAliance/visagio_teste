@@ -1,1 +1,2 @@
 MICRODADOS_CADASTRO_CURSOS_2024_SLIM.csv filter=lfs diff=lfs merge=lfs -text
+MICRODADOS_CADASTRO_CURSOS_2024.CSV filter=lfs diff=lfs merge=lfs -text

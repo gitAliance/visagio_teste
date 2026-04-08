@@ -56,6 +56,7 @@ INEP_COL_LABELS = {
     "NO_REGIAO": "Regiao",
     "SG_UF": "UF",
     "NO_IES": "IES",
+    "NO_MANTENEDORA": "Mantenedora",
     "TP_MODALIDADE_ENSINO": "Modalidade",
     "TP_CATEGORIA_ADMINISTRATIVA": "Categoria administrativa",
     "TP_REDE": "Tipo de rede",
@@ -136,6 +137,14 @@ def find_col(cols: pd.Index, token: str) -> str:
     raise KeyError(f"Coluna contendo token '{token}' nao encontrada.")
 
 
+def find_col_optional(cols: pd.Index, token: str) -> str | None:
+    token_up = token.upper()
+    for col in cols:
+        if token_up in str(col).upper():
+            return str(col)
+    return None
+
+
 @st.cache_data(show_spinner=False)
 def load_data() -> tuple[pd.DataFrame, dict]:
     alunos = extract_main_block(EXCEL_PATH, "Alunos V-Educa").copy()
@@ -144,11 +153,13 @@ def load_data() -> tuple[pd.DataFrame, dict]:
         "ano": find_col(alunos.columns, "ANO"),
         "uf": find_col(alunos.columns, "UF"),
         "area": find_col(alunos.columns, "AREA"),
+        "area_inep": find_col_optional(alunos.columns, "NO_CINE_AREA_GERAL"),
         "curso": find_col(alunos.columns, "CURSO"),
         "modalidade": find_col(alunos.columns, "MODAL"),
         "ticket": find_col(alunos.columns, "TICKET"),
         "ingressantes": find_col(alunos.columns, "INGRESS"),
         "matriculados": find_col(alunos.columns, "MATRIC"),
+        "no_ies": find_col_optional(alunos.columns, "NO_IES"),
     }
 
     for c in [meta["ano"], meta["ticket"], meta["ingressantes"], meta["matriculados"]]:
@@ -158,6 +169,10 @@ def load_data() -> tuple[pd.DataFrame, dict]:
     alunos[meta["ano"]] = alunos[meta["ano"]].astype("Int64")
     for c in [meta["uf"], meta["area"], meta["curso"], meta["modalidade"]]:
         alunos[c] = alunos[c].astype("string")
+    if meta["area_inep"]:
+        alunos[meta["area_inep"]] = alunos[meta["area_inep"]].astype("string")
+    if meta["no_ies"]:
+        alunos[meta["no_ies"]] = alunos[meta["no_ies"]].astype("string")
 
     return alunos, meta
 
@@ -177,6 +192,7 @@ def load_inep_data() -> pd.DataFrame:
             "NO_REGIAO",
             "SG_UF",
             "NO_IES",
+            "NO_MANTENEDORA",
             "TP_MODALIDADE_ENSINO",
             "TP_CATEGORIA_ADMINISTRATIVA",
             "TP_REDE",
@@ -200,7 +216,7 @@ def load_inep_data() -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    for col in ["NO_REGIAO", "SG_UF", "NO_IES", "NO_CINE_AREA_GERAL", "NO_CINE_ROTULO"]:
+    for col in ["NO_REGIAO", "SG_UF", "NO_IES", "NO_MANTENEDORA", "NO_CINE_AREA_GERAL", "NO_CINE_ROTULO"]:
         if col in df.columns:
             df[col] = df[col].astype("string")
 
@@ -488,8 +504,10 @@ def main() -> None:
     ano_col = meta["ano"]
     uf_col = meta["uf"]
     area_col = meta["area"]
+    area_inep_col = meta["area_inep"]
     curso_col = meta["curso"]
     modal_col = meta["modalidade"]
+    veduca_no_ies_col = meta["no_ies"]
     mat_col = meta["matriculados"]
     ing_col = meta["ingressantes"]
     rec_col = "receita_total_estimada"
@@ -501,6 +519,10 @@ def main() -> None:
         anos = st.multiselect("Ano", options_for(alunos, ano_col), default=[TODOS], key="vedu_anos")
         ufs = st.multiselect("UF", options_for(alunos, uf_col), default=[TODOS], key="vedu_ufs")
         areas = st.multiselect("Area", options_for(alunos, area_col), default=[TODOS], key="vedu_areas")
+        if area_inep_col and area_inep_col in alunos.columns:
+            areas_inep = st.multiselect("Area INEP", options_for(alunos, area_inep_col), default=[TODOS], key="vedu_areas_inep")
+        else:
+            areas_inep = [TODOS]
         cursos = st.multiselect("Curso", options_for(alunos, curso_col), default=[TODOS], key="vedu_cursos")
         modalidades = st.multiselect("Modalidade", options_for(alunos, modal_col), default=[TODOS], key="vedu_modalidades")
 
@@ -521,6 +543,13 @@ def main() -> None:
         st.divider()
         st.subheader("INEP")
 
+        cortar_por_ies_veduca = st.toggle(
+            "Cortar por IES da V-Educa (NO_IES)",
+            value=False,
+            key="inep_cut_veduca_ies",
+            help="Quando ativado, exibe apenas registros INEP cujo NO_IES exista na base V-Educa.",
+        )
+
         available_metrics = [c for c in INEP_NUMERIC_COLS if c in df_inep.columns] if not df_inep.empty else []
         available_dims = [
             c
@@ -528,6 +557,7 @@ def main() -> None:
                 "NO_REGIAO",
                 "SG_UF",
                 "NO_IES",
+                "NO_MANTENEDORA",
                 "TP_MODALIDADE_ENSINO",
                 "TP_CATEGORIA_ADMINISTRATIVA",
                 "TP_REDE",
@@ -603,6 +633,8 @@ def main() -> None:
         f = apply_filter(f, ano_col, anos)
         f = apply_filter(f, uf_col, ufs)
         f = apply_filter(f, area_col, areas)
+        if area_inep_col and area_inep_col in f.columns:
+            f = apply_filter(f, area_inep_col, areas_inep)
         f = apply_filter(f, curso_col, cursos)
         f = apply_filter(f, modal_col, modalidades)
 
@@ -705,6 +737,22 @@ def main() -> None:
             return
 
         f_inep = df_inep.copy()
+
+        if cortar_por_ies_veduca:
+            if "NO_IES" not in f_inep.columns:
+                st.warning("Corte por V-Educa nao aplicado: coluna NO_IES ausente na base INEP.")
+            elif not veduca_no_ies_col or veduca_no_ies_col not in alunos.columns:
+                st.warning("Corte por V-Educa nao aplicado: coluna NO_IES ausente na base V-Educa.")
+            else:
+                ies_veduca = set(alunos[veduca_no_ies_col].dropna().astype(str).str.strip())
+                ies_veduca = {v for v in ies_veduca if v}
+                if not ies_veduca:
+                    st.warning("Corte por V-Educa nao aplicado: base V-Educa sem valores validos de NO_IES.")
+                else:
+                    before_cut = len(f_inep)
+                    f_inep = f_inep[f_inep["NO_IES"].astype(str).str.strip().isin(ies_veduca)]
+                    st.caption(f"Corte V-Educa ativo: {len(f_inep):,} de {before_cut:,} registros INEP mantidos.")
+
         for dim_col, selected_values in inep_dynamic_filters.items():
             f_inep = f_inep[f_inep[dim_col].isin(selected_values)]
 
