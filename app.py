@@ -26,6 +26,8 @@ INEP_MODALIDADE_LABELS = {
 INEP_MODALIDADE_CORES = {
     "Presencial": "#2ca02c",
     "Curso a distancia": "#1f77b4",
+    "VEDUCA Presencial": "#ff8c42",
+    "VEDUCA EAD": "#ffb26b",
 }
 INEP_TP_REDE_LABELS = {
     1: "Publica",
@@ -543,11 +545,11 @@ def main() -> None:
         st.divider()
         st.subheader("INEP")
 
-        cortar_por_ies_veduca = st.toggle(
-            "Cortar por IES da V-Educa (NO_IES)",
+        destacar_veduca_inep = st.toggle(
+            "Destacar V-Educa no grafico INEP",
             value=False,
-            key="inep_cut_veduca_ies",
-            help="Quando ativado, exibe apenas registros INEP cujo NO_IES exista na base V-Educa.",
+            key="inep_highlight_veduca",
+            help="Quando ativado, separa visualmente VEDUCA EAD e VEDUCA Presencial no grafico de composicao do INEP.",
         )
 
         available_metrics = [c for c in INEP_NUMERIC_COLS if c in df_inep.columns] if not df_inep.empty else []
@@ -738,21 +740,6 @@ def main() -> None:
 
         f_inep = df_inep.copy()
 
-        if cortar_por_ies_veduca:
-            if "NO_IES" not in f_inep.columns:
-                st.warning("Corte por V-Educa nao aplicado: coluna NO_IES ausente na base INEP.")
-            elif not veduca_no_ies_col or veduca_no_ies_col not in alunos.columns:
-                st.warning("Corte por V-Educa nao aplicado: coluna NO_IES ausente na base V-Educa.")
-            else:
-                ies_veduca = set(alunos[veduca_no_ies_col].dropna().astype(str).str.strip())
-                ies_veduca = {v for v in ies_veduca if v}
-                if not ies_veduca:
-                    st.warning("Corte por V-Educa nao aplicado: base V-Educa sem valores validos de NO_IES.")
-                else:
-                    before_cut = len(f_inep)
-                    f_inep = f_inep[f_inep["NO_IES"].astype(str).str.strip().isin(ies_veduca)]
-                    st.caption(f"Corte V-Educa ativo: {len(f_inep):,} de {before_cut:,} registros INEP mantidos.")
-
         for dim_col, selected_values in inep_dynamic_filters.items():
             f_inep = f_inep[f_inep[dim_col].isin(selected_values)]
 
@@ -764,6 +751,22 @@ def main() -> None:
             f_inep["__modal_label__"] = f_inep["TP_MODALIDADE_ENSINO"].map(
                 lambda v: INEP_MODALIDADE_LABELS.get(int(v), str(v)) if pd.notna(v) else "(vazio)"
             )
+
+            if destacar_veduca_inep:
+                if "NO_IES" not in f_inep.columns:
+                    st.warning("Destaque V-Educa nao aplicado: coluna NO_IES ausente na base INEP.")
+                elif not veduca_no_ies_col or veduca_no_ies_col not in alunos.columns:
+                    st.warning("Destaque V-Educa nao aplicado: coluna NO_IES ausente na base V-Educa.")
+                else:
+                    ies_veduca = set(alunos[veduca_no_ies_col].dropna().astype(str).str.strip())
+                    ies_veduca = {v for v in ies_veduca if v}
+                    if not ies_veduca:
+                        st.warning("Destaque V-Educa nao aplicado: base V-Educa sem valores validos de NO_IES.")
+                    else:
+                        in_veduca = f_inep["NO_IES"].astype(str).str.strip().isin(ies_veduca)
+                        f_inep.loc[in_veduca & (f_inep["__modal_label__"] == "Presencial"), "__modal_label__"] = "VEDUCA Presencial"
+                        f_inep.loc[in_veduca & (f_inep["__modal_label__"] == "Curso a distancia"), "__modal_label__"] = "VEDUCA EAD"
+                        st.caption("Destaque V-Educa ativo no grafico de composicao (tons de laranja).")
         else:
             f_inep["__modal_label__"] = "Sem modalidade"
 
@@ -803,7 +806,7 @@ def main() -> None:
                 area_txt="cursos",
                 metric_txt=inep_metric_label(inep_metric),
                 x_label=inep_x_label,
-                stack_order=["Presencial", "Curso a distancia"],
+                stack_order=["Presencial", "Curso a distancia", "VEDUCA Presencial", "VEDUCA EAD"],
                 color_map=INEP_MODALIDADE_CORES,
             )
             if fig_inep_main is None:
