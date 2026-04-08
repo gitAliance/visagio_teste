@@ -24,8 +24,8 @@ INEP_MODALIDADE_LABELS = {
     2: "Curso a distancia",
 }
 INEP_MODALIDADE_CORES = {
-    "Presencial": "#1f77b4",
-    "Curso a distancia": "#2ca02c",
+    "Presencial": "#2ca02c",
+    "Curso a distancia": "#1f77b4",
 }
 INEP_TP_REDE_LABELS = {
     1: "Publica",
