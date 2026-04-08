@@ -753,21 +753,30 @@ def main() -> None:
             )
 
             if destacar_veduca_inep:
-                if "NO_IES" not in f_inep.columns:
-                    st.warning("Destaque V-Educa nao aplicado: coluna NO_IES ausente na base INEP.")
-                elif not veduca_no_ies_col or veduca_no_ies_col not in alunos.columns:
-                    st.warning("Destaque V-Educa nao aplicado: coluna NO_IES ausente na base V-Educa.")
+                in_veduca = pd.Series(False, index=f_inep.index)
+                criterio_txt = ""
+
+                # Prioriza identificacao via NO_MANTENEDORA na base SLIM/INEP.
+                if "NO_MANTENEDORA" in f_inep.columns:
+                    mantenedora_txt = f_inep["NO_MANTENEDORA"].astype("string").fillna("").str.upper()
+                    in_veduca = mantenedora_txt.str.contains(r"V-EDUCA|VEDUCA", regex=True, na=False)
+                    criterio_txt = "NO_MANTENEDORA"
+                elif "NO_IES" in f_inep.columns:
+                    no_ies_txt = f_inep["NO_IES"].astype("string").fillna("").str.upper()
+                    in_veduca = no_ies_txt.str.contains(r"V-EDUCA|VEDUCA", regex=True, na=False)
+                    criterio_txt = "NO_IES"
                 else:
-                    ies_veduca = set(alunos[veduca_no_ies_col].dropna().astype(str).str.strip())
-                    ies_veduca = {v for v in ies_veduca if v}
-                    if not ies_veduca:
-                        st.warning("Destaque V-Educa nao aplicado: base V-Educa sem valores validos de NO_IES.")
+                    st.warning("Destaque V-Educa nao aplicado: colunas NO_MANTENEDORA e NO_IES ausentes na base SLIM/INEP.")
+
+                if criterio_txt:
+                    qtd_veduca = int(in_veduca.sum())
+                    if qtd_veduca == 0:
+                        st.warning(f"Destaque V-Educa nao aplicado: nenhum registro identificado por {criterio_txt} na base SLIM/INEP.")
                     else:
-                        in_veduca = f_inep["NO_IES"].astype(str).str.strip().isin(ies_veduca)
                         modalidade_num = pd.to_numeric(f_inep["TP_MODALIDADE_ENSINO"], errors="coerce")
                         f_inep.loc[in_veduca & (modalidade_num == 1), "__modal_label__"] = "VEDUCA Presencial"
                         f_inep.loc[in_veduca & (modalidade_num == 2), "__modal_label__"] = "VEDUCA EAD"
-                        st.caption("Destaque V-Educa ativo no grafico de composicao (tons de laranja).")
+                        st.caption(f"Destaque V-Educa ativo ({qtd_veduca:,} registros identificados por {criterio_txt} na SLIM/INEP).")
         else:
             f_inep["__modal_label__"] = "Sem modalidade"
 
