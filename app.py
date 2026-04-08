@@ -764,8 +764,9 @@ def main() -> None:
                         st.warning("Destaque V-Educa nao aplicado: base V-Educa sem valores validos de NO_IES.")
                     else:
                         in_veduca = f_inep["NO_IES"].astype(str).str.strip().isin(ies_veduca)
-                        f_inep.loc[in_veduca & (f_inep["__modal_label__"] == "Presencial"), "__modal_label__"] = "VEDUCA Presencial"
-                        f_inep.loc[in_veduca & (f_inep["__modal_label__"] == "Curso a distancia"), "__modal_label__"] = "VEDUCA EAD"
+                        modalidade_num = pd.to_numeric(f_inep["TP_MODALIDADE_ENSINO"], errors="coerce")
+                        f_inep.loc[in_veduca & (modalidade_num == 1), "__modal_label__"] = "VEDUCA Presencial"
+                        f_inep.loc[in_veduca & (modalidade_num == 2), "__modal_label__"] = "VEDUCA EAD"
                         st.caption("Destaque V-Educa ativo no grafico de composicao (tons de laranja).")
         else:
             f_inep["__modal_label__"] = "Sem modalidade"
