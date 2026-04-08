@@ -429,6 +429,44 @@ def render_ratio_chart(
     return fig
 
 
+def render_rank_chart(
+    data_base: pd.DataFrame,
+    x_col: str,
+    metrica: str,
+    topn: int,
+    x_label: str,
+    metric_txt: str,
+) -> go.Figure | None:
+    rank = (
+        data_base.groupby(x_col, as_index=False)[metrica]
+        .sum()
+        .sort_values(metrica, ascending=False)
+        .head(topn)
+    )
+    if rank.empty:
+        return None
+
+    rank = rank.sort_values(metrica, ascending=True)
+    fig = go.Figure(
+        go.Bar(
+            x=rank[metrica],
+            y=rank[x_col].astype(str),
+            orientation="h",
+            text=rank[metrica],
+            textposition="outside",
+            marker_color="#2f6f95",
+            hovertemplate=f"{x_label}: %{{y}}<br>{metric_txt}: %{{x:,.2f}}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title=f"Ranking por {x_label.lower()} - {metric_txt} (Top {topn})",
+        xaxis_title=metric_txt,
+        yaxis_title=x_label,
+        height=560,
+    )
+    return fig
+
+
 def main() -> None:
     st.set_page_config(page_title="Dashboard V-Educa e INEP", layout="wide")
     st.title("Dashboard Dinamico - V-Educa e INEP")
@@ -448,91 +486,96 @@ def main() -> None:
     ing_col = meta["ingressantes"]
     rec_col = "receita_total_estimada"
 
-    with st.sidebar:
-        st.header("Filtros")
-        anos = st.multiselect("Ano", options_for(alunos, ano_col), default=[TODOS])
-        ufs = st.multiselect("UF", options_for(alunos, uf_col), default=[TODOS])
-        areas = st.multiselect("Area", options_for(alunos, area_col), default=[TODOS])
-        cursos = st.multiselect("Curso", options_for(alunos, curso_col), default=[TODOS])
-        modalidades = st.multiselect("Modalidade", options_for(alunos, modal_col), default=[TODOS])
-
-        visao = st.selectbox(
-            "Eixo X",
-            options=[curso_col, area_col, uf_col],
-            format_func=lambda c: axis_label(c, curso_col, area_col),
-        )
-        metrica = st.selectbox(
-            "Metrica",
-            options=[mat_col, ing_col, rec_col],
-            format_func=lambda c: metric_label(c, mat_col, ing_col),
-        )
-        topn = st.slider("Top N", min_value=5, max_value=40, value=15, step=1)
-
-    f = alunos.copy()
-    f = apply_filter(f, ano_col, anos)
-    f = apply_filter(f, uf_col, ufs)
-    f = apply_filter(f, area_col, areas)
-    f = apply_filter(f, curso_col, cursos)
-    f = apply_filter(f, modal_col, modalidades)
-
-    if f.empty:
-        st.warning("Sem dados para os filtros selecionados.")
-        return
-
-    ano_txt = selected_text(anos)
-    uf_txt = selected_text(ufs)
-    area_txt = selected_text(areas)
-    metric_txt = metric_label(metrica, mat_col, ing_col)
-    x_label = axis_label(visao, curso_col, area_col)
-
     app_tab1, app_tab2 = st.tabs(["V-Educa", "INEP Cursos"])
 
     with app_tab1:
+        st.subheader("Painel V-Educa")
+        with st.expander("Filtros V-Educa", expanded=True):
+            anos = st.multiselect("Ano", options_for(alunos, ano_col), default=[TODOS], key="vedu_anos")
+            ufs = st.multiselect("UF", options_for(alunos, uf_col), default=[TODOS], key="vedu_ufs")
+            areas = st.multiselect("Area", options_for(alunos, area_col), default=[TODOS], key="vedu_areas")
+            cursos = st.multiselect("Curso", options_for(alunos, curso_col), default=[TODOS], key="vedu_cursos")
+            modalidades = st.multiselect("Modalidade", options_for(alunos, modal_col), default=[TODOS], key="vedu_modalidades")
+
+            visao = st.selectbox(
+                "Eixo X",
+                options=[curso_col, area_col, uf_col],
+                format_func=lambda c: axis_label(c, curso_col, area_col),
+                key="vedu_visao",
+            )
+            metrica = st.selectbox(
+                "Metrica",
+                options=[mat_col, ing_col, rec_col],
+                format_func=lambda c: metric_label(c, mat_col, ing_col),
+                key="vedu_metrica",
+            )
+            topn = st.slider("Top N", min_value=5, max_value=40, value=15, step=1, key="vedu_topn")
+
+        f = alunos.copy()
+        f = apply_filter(f, ano_col, anos)
+        f = apply_filter(f, uf_col, ufs)
+        f = apply_filter(f, area_col, areas)
+        f = apply_filter(f, curso_col, cursos)
+        f = apply_filter(f, modal_col, modalidades)
+
+        ano_txt = selected_text(anos)
+        uf_txt = selected_text(ufs)
+        area_txt = selected_text(areas)
+        metric_txt = metric_label(metrica, mat_col, ing_col)
+        x_label = axis_label(visao, curso_col, area_col)
+
         tab1, tab2, tab3 = st.tabs(["Composicao", "Relacao M/I", "Exportacao"])
 
         with tab1:
-            fig_main = render_main_chart(
-                data_base=f,
-                metrica=metrica,
-                x_col=visao,
-                modal_col=modal_col,
-                topn=topn,
-                ano_txt=ano_txt,
-                uf_txt=uf_txt,
-                area_txt=area_txt,
-                metric_txt=metric_txt,
-                x_label=x_label,
-            )
-            if fig_main is None:
-                st.info("Sem dados para montar o grafico principal.")
+            if f.empty:
+                fig_main = None
+                st.warning("Sem dados para os filtros selecionados.")
             else:
-                st.plotly_chart(fig_main, use_container_width=True)
+                fig_main = render_main_chart(
+                    data_base=f,
+                    metrica=metrica,
+                    x_col=visao,
+                    modal_col=modal_col,
+                    topn=topn,
+                    ano_txt=ano_txt,
+                    uf_txt=uf_txt,
+                    area_txt=area_txt,
+                    metric_txt=metric_txt,
+                    x_label=x_label,
+                )
+                if fig_main is None:
+                    st.info("Sem dados para montar o grafico principal.")
+                else:
+                    st.plotly_chart(fig_main, use_container_width=True)
 
-            total_mat = float(f[mat_col].sum())
-            total_ing = float(f[ing_col].sum())
-            total_rec = float(f[rec_col].sum())
-            ticket_calc = (total_rec / total_mat) if total_mat > 0 else 0.0
+                total_mat = float(f[mat_col].sum())
+                total_ing = float(f[ing_col].sum())
+                total_rec = float(f[rec_col].sum())
+                ticket_calc = (total_rec / total_mat) if total_mat > 0 else 0.0
 
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Registros", f"{len(f):,}".replace(",", "."))
-            c2.metric("Matriculas", f"{total_mat:,.0f}".replace(",", "."))
-            c3.metric("Ingressantes", f"{total_ing:,.0f}".replace(",", "."))
-            c4.metric("Receita estimada", f"{total_rec:,.2f}".replace(",", "."))
-            c5.metric("Ticket medio recalculado", f"{ticket_calc:,.2f}".replace(",", "."))
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Registros", f"{len(f):,}".replace(",", "."))
+                c2.metric("Matriculas", f"{total_mat:,.0f}".replace(",", "."))
+                c3.metric("Ingressantes", f"{total_ing:,.0f}".replace(",", "."))
+                c4.metric("Receita estimada", f"{total_rec:,.2f}".replace(",", "."))
+                c5.metric("Ticket medio recalculado", f"{ticket_calc:,.2f}".replace(",", "."))
 
         with tab2:
-            fig_ratio = render_ratio_chart(
-                data_base=f,
-                x_col=visao,
-                mat_col=mat_col,
-                ing_col=ing_col,
-                topn=topn,
-                x_label=x_label,
-            )
-            if fig_ratio is None:
-                st.info("Nao ha grupos com ingressantes > 0.")
+            if f.empty:
+                st.info("Sem dados para os filtros selecionados.")
             else:
-                st.plotly_chart(fig_ratio, use_container_width=True)
+                fig_ratio = render_ratio_chart(
+                    data_base=f,
+                    x_col=visao,
+                    mat_col=mat_col,
+                    ing_col=ing_col,
+                    topn=topn,
+                    x_label=x_label,
+                )
+                if fig_ratio is None:
+                    st.info("Nao ha grupos com ingressantes > 0.")
+                else:
+                    st.plotly_chart(fig_ratio, use_container_width=True)
 
         with tab3:
             st.write("Exportacao do grafico principal em PNG")
@@ -661,6 +704,20 @@ def main() -> None:
         else:
             inep_x_col = inep_dim
             inep_x_label = inep_dim_label(inep_dim)
+
+        # Exibe de imediato o ranking pela dimensao selecionada (ultimo grafico da analise dinamica).
+        fig_inep_rank = render_rank_chart(
+            data_base=f_inep,
+            x_col=inep_x_col,
+            metrica=inep_metric,
+            topn=inep_topn,
+            x_label=inep_x_label,
+            metric_txt=inep_metric_label(inep_metric),
+        )
+        if fig_inep_rank is None:
+            st.info("Sem dados para montar o ranking INEP.")
+        else:
+            st.plotly_chart(fig_inep_rank, use_container_width=True)
 
         inep_tabs = st.tabs(["Composicao", "Relacao M/I", "Exportacao"])
 
