@@ -343,7 +343,9 @@ def grouped_for_main(
 
     grp = base.groupby([x_col, modal_col], as_index=False)[metrica].sum()
     total = grp.groupby(x_col, as_index=False)[metrica].sum().rename(columns={metrica: "total_grupo"})
-    grp = grp.merge(total, on=x_col, how="left")
+    grp = grp.merge(total, on=x_col, how="left", suffixes=("", "_dup"))
+    # Remover colunas duplicadas (se houver)
+    grp = grp.loc[:, ~grp.columns.duplicated()]
     grp["pct_grupo"] = grp[metrica] / grp["total_grupo"] * 100.0
 
     order_map = {c: i for i, c in enumerate(top_values)}
