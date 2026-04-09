@@ -978,14 +978,10 @@ def main() -> None:
         st.subheader("Dados por Mantenedora")
         
         cols_exibir = ["NO_MANTENEDORA"]
-        if metrica_col in dados_mantenedora.columns:
-            cols_exibir.append(metrica_col)
-        if "QT_MAT" in dados_mantenedora.columns:
-            cols_exibir.append("QT_MAT")
-        if "QT_ING" in dados_mantenedora.columns:
-            cols_exibir.append("QT_ING")
-        if "QT_CURSO" in dados_mantenedora.columns:
-            cols_exibir.append("QT_CURSO")
+        # Adicionar apenas as colunas que ainda não estão na lista
+        for col in ["QT_MAT", "QT_ING", "QT_CURSO"]:
+            if col in dados_mantenedora.columns and col not in cols_exibir:
+                cols_exibir.append(col)
         
         tabela_exibicao = dados_mantenedora[cols_exibir].copy()
         tabela_nomes = {
