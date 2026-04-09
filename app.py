@@ -626,7 +626,7 @@ def main() -> None:
             inep_topn = 15
             inep_dynamic_filters = {}
 
-    app_tab1, app_tab2 = st.tabs(["V-Educa", "INEP Cursos"])
+    app_tab1, app_tab2, app_tab3 = st.tabs(["V-Educa", "INEP Cursos", "Análise por Mantenedora"])
 
     with app_tab1:
         st.subheader("Painel V-Educa")
@@ -886,6 +886,153 @@ def main() -> None:
                         file_name=html_name,
                         mime="text/html",
                     )
+
+    with app_tab3:
+        st.subheader("Análise por Mantenedora")
+        if df_inep.empty:
+            st.warning("Dados INEP não disponíveis para análise por mantenedora.")
+            return
+
+        f_mantenedora = df_inep.copy()
+
+        # Aplicar filtros dinâmicos existentes
+        for dim_col, selected_values in inep_dynamic_filters.items():
+            f_mantenedora = f_mantenedora[f_mantenedora[dim_col].isin(selected_values)]
+
+        if f_mantenedora.empty:
+            st.warning("Sem dados para os filtros selecionados na análise por mantenedora.")
+            return
+
+        # Filtros adicionais para essa aba
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Opção de métrica
+            metrica_mantenedora = st.selectbox(
+                "Selecione a métrica:",
+                options=[
+                    ("Matrículas", "QT_MAT"),
+                    ("Cursos", "QT_CURSO"),
+                    ("Ingressantes", "QT_ING"),
+                ],
+                format_func=lambda x: x[0],
+                key="mantenedora_metrica",
+            )
+            metrica_col = metrica_mantenedora[1]
+        
+        with col2:
+            # Quantidade de mantenedoras a exibir
+            top_n_mantenedoras = st.slider(
+                "Quantas mantenedoras exibir?",
+                min_value=5,
+                max_value=50,
+                value=20,
+                step=5,
+                key="mantenedora_topn",
+            )
+
+        if "NO_MANTENEDORA" not in f_mantenedora.columns:
+            st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
+            return
+
+        # Agregar dados por mantenedora
+        dados_mantenedora = f_mantenedora.groupby("NO_MANTENEDORA", as_index=False).agg({
+            col: "sum" for col in ["QT_MAT", "QT_ING", "QT_CURSO"] if col in f_mantenedora.columns
+        }).dropna(subset=["NO_MANTENEDORA"])
+
+        # Converter para numérico
+        for col in ["QT_MAT", "QT_ING", "QT_CURSO"]:
+            if col in dados_mantenedora.columns:
+                dados_mantenedora[col] = pd.to_numeric(dados_mantenedora[col], errors="coerce").fillna(0)
+
+        # Ordenar e pegar top N
+        if metrica_col in dados_mantenedora.columns:
+            dados_mantenedora = dados_mantenedora.sort_values(by=metrica_col, ascending=False).head(top_n_mantenedoras)
+        else:
+            st.error(f"Métrica {metrica_col} não disponível nos dados.")
+            return
+
+        # Gráfico de ranking
+        fig_mantenedora = go.Figure(data=[
+            go.Bar(
+                x=dados_mantenedora["NO_MANTENEDORA"],
+                y=dados_mantenedora[metrica_col],
+                marker_color="#2ca02c",
+                hovertemplate="<b>%{x}</b><br>" + inep_metric_label(metrica_col) + ": %{y:,.0f}<extra></extra>",
+            )
+        ])
+
+        fig_mantenedora.update_layout(
+            title=f"Top {len(dados_mantenedora)} Mantenedoras - {inep_metric_label(metrica_col)}",
+            xaxis_title="Mantenedora",
+            yaxis_title=inep_metric_label(metrica_col),
+            hovermode="x unified",
+            height=500,
+            margin=dict(b=100),
+        )
+        fig_mantenedora.update_xaxes(tickangle=-45)
+
+        st.plotly_chart(fig_mantenedora, use_container_width=True)
+
+        # Tabela com dados
+        st.subheader("Dados por Mantenedora")
+        
+        cols_exibir = ["NO_MANTENEDORA"]
+        if metrica_col in dados_mantenedora.columns:
+            cols_exibir.append(metrica_col)
+        if "QT_MAT" in dados_mantenedora.columns:
+            cols_exibir.append("QT_MAT")
+        if "QT_ING" in dados_mantenedora.columns:
+            cols_exibir.append("QT_ING")
+        if "QT_CURSO" in dados_mantenedora.columns:
+            cols_exibir.append("QT_CURSO")
+        
+        tabela_exibicao = dados_mantenedora[cols_exibir].copy()
+        tabela_nomes = {
+            "NO_MANTENEDORA": "Mantenedora",
+            "QT_MAT": "Matriculados",
+            "QT_ING": "Ingressantes",
+            "QT_CURSO": "Cursos",
+        }
+        tabela_exibicao = tabela_exibicao.rename(columns=tabela_nomes)
+        
+        st.dataframe(
+            tabela_exibicao.style.format(
+                {col: "{:,.0f}" for col in tabela_exibicao.columns[1:]}
+            ),
+            use_container_width=True,
+        )
+
+        # Downloads
+        st.subheader("Exportação")
+        csv_mantenedora = dados_mantenedora.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="📥 Baixar CSV",
+            data=csv_mantenedora,
+            file_name=f"analise_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
+                     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
+
+        try:
+            png_bytes = fig_mantenedora.to_image(format="png", width=1600, height=900, scale=2)
+            st.download_button(
+                label="📥 Baixar Gráfico (PNG)",
+                data=png_bytes,
+                file_name=f"grafico_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
+                         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                mime="image/png",
+            )
+        except Exception as exc:
+            st.info(f"PNG não disponível neste ambiente: {exc}")
+            html_grafico = fig_mantenedora.to_html(full_html=True, include_plotlyjs="cdn")
+            st.download_button(
+                label="📥 Baixar Gráfico (HTML)",
+                data=html_grafico,
+                file_name=f"grafico_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
+                         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                mime="text/html",
+            )
 
 
 if __name__ == "__main__":
