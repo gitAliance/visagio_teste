@@ -61,6 +61,7 @@ INEP_COL_LABELS = {
     "NO_MANTENEDORA": "Mantenedora",
     "TP_MODALIDADE_ENSINO": "Modalidade",
     "TP_CATEGORIA_ADMINISTRATIVA": "Categoria administrativa",
+    "TP_ORGANIZACAO_ACADEMICA": "Organizacao academica",
     "TP_REDE": "Tipo de rede",
     "NO_CINE_AREA_GERAL": "Area CINE",
     "NO_CINE_ROTULO": "Rotulo CINE",
@@ -75,6 +76,20 @@ INEP_COL_LABELS = {
     "QT_MAT_MASC": "Matriculados masculino",
     "QT_CONC": "Concluintes",
 }
+
+INEP_FILTER_DIMENSIONS = [
+    "NU_ANO_CENSO",
+    "NO_REGIAO",
+    "SG_UF",
+    "NO_IES",
+    "NO_MANTENEDORA",
+    "TP_MODALIDADE_ENSINO",
+    "TP_CATEGORIA_ADMINISTRATIVA",
+    "TP_ORGANIZACAO_ACADEMICA",
+    "TP_REDE",
+    "NO_CINE_AREA_GERAL",
+    "NO_CINE_ROTULO",
+]
 
 
 def extract_main_block(xlsx: Path, sheet: str) -> pd.DataFrame:
@@ -553,21 +568,7 @@ def main() -> None:
         )
 
         available_metrics = [c for c in INEP_NUMERIC_COLS if c in df_inep.columns] if not df_inep.empty else []
-        available_dims = [
-            c
-            for c in [
-                "NO_REGIAO",
-                "SG_UF",
-                "NO_IES",
-                "NO_MANTENEDORA",
-                "TP_MODALIDADE_ENSINO",
-                "TP_CATEGORIA_ADMINISTRATIVA",
-                "TP_REDE",
-                "NO_CINE_AREA_GERAL",
-                "NO_CINE_ROTULO",
-            ]
-            if c in df_inep.columns
-        ] if not df_inep.empty else []
+        available_dims = [c for c in INEP_FILTER_DIMENSIONS if c in df_inep.columns] if not df_inep.empty else []
 
         if available_metrics and available_dims:
             inep_metric = st.selectbox(
@@ -586,8 +587,7 @@ def main() -> None:
             )
             inep_topn = st.slider("Top N (INEP)", min_value=5, max_value=40, value=15, step=1, key="inep_topn")
 
-            inep_filterable_dims = ["NU_ANO_CENSO", *available_dims]
-            inep_filterable_dims = [c for c in inep_filterable_dims if c in df_inep.columns]
+            inep_filterable_dims = [c for c in INEP_FILTER_DIMENSIONS if c in df_inep.columns]
             default_dyn_dims = [
                 c
                 for c in ["NU_ANO_CENSO", "NO_REGIAO", "SG_UF", "NO_CINE_AREA_GERAL"]
