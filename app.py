@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import re
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -90,6 +91,36 @@ INEP_FILTER_DIMENSIONS = [
     "NO_CINE_AREA_GERAL",
     "NO_CINE_ROTULO",
 ]
+
+UF_CENTROIDS = {
+    "AC": (-8.77, -70.55),
+    "AL": (-9.71, -35.73),
+    "AP": (1.41, -51.77),
+    "AM": (-3.47, -65.10),
+    "BA": (-12.96, -38.51),
+    "CE": (-3.71, -38.54),
+    "DF": (-15.78, -47.93),
+    "ES": (-19.19, -40.34),
+    "GO": (-16.64, -49.31),
+    "MA": (-2.53, -44.30),
+    "MT": (-15.60, -56.10),
+    "MS": (-20.44, -54.64),
+    "MG": (-19.92, -43.94),
+    "PA": (-1.45, -48.49),
+    "PB": (-7.12, -34.86),
+    "PR": (-25.42, -49.27),
+    "PE": (-8.05, -34.90),
+    "PI": (-5.09, -42.80),
+    "RJ": (-22.90, -43.17),
+    "RN": (-5.79, -35.21),
+    "RS": (-30.03, -51.23),
+    "RO": (-8.76, -63.90),
+    "RR": (2.82, -60.67),
+    "SC": (-27.59, -48.55),
+    "SP": (-23.55, -46.63),
+    "SE": (-10.90, -37.07),
+    "TO": (-10.18, -48.33),
+}
 
 
 def extract_main_block(xlsx: Path, sheet: str) -> pd.DataFrame:
@@ -509,6 +540,63 @@ def render_rank_chart(
     return fig
 
 
+def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: str) -> go.Figure | None:
+    if uf_values.empty:
+        return None
+
+    map_df = uf_values.copy()
+    map_df["SG_UF"] = map_df["SG_UF"].astype("string").str.upper()
+    map_df = map_df[map_df["SG_UF"].isin(UF_CENTROIDS.keys())].copy()
+    if map_df.empty:
+        return None
+
+    map_df["lat"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][0])
+    map_df["lon"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][1])
+    map_df["valor_fmt"] = map_df[metric_col].map(lambda v: f"{float(v):,.0f}".replace(",", "."))
+
+    fig = go.Figure(
+        go.Scattergeo(
+            lat=map_df["lat"],
+            lon=map_df["lon"],
+            mode="markers+text",
+            text=map_df["SG_UF"],
+            textposition="top center",
+            customdata=map_df[["SG_UF", metric_col, "valor_fmt"]],
+            marker=dict(
+                size=map_df[metric_col].fillna(0).clip(lower=0).pow(0.35) * 4 + 8,
+                color=map_df[metric_col],
+                colorscale="YlGnBu",
+                colorbar=dict(title=metric_txt),
+                line=dict(color="white", width=0.7),
+                sizemode="diameter",
+                opacity=0.88,
+            ),
+            hovertemplate=(
+                "<b>UF: %{customdata[0]}</b><br>"
+                + f"{metric_txt}: "
+                + "%{customdata[2]}<extra></extra>"
+            ),
+        )
+    )
+
+    fig.update_layout(
+        title=f"Mapa do Brasil por UF - {metric_txt}",
+        height=560,
+        margin=dict(l=10, r=10, t=60, b=10),
+        geo=dict(
+            scope="south america",
+            center=dict(lat=-14.5, lon=-52),
+            projection_scale=4.2,
+            showland=True,
+            landcolor="#f5f5f5",
+            showcountries=True,
+            countrycolor="#7f7f7f",
+            coastlinecolor="#999999",
+        ),
+    )
+    return fig
+
+
 def main() -> None:
     st.set_page_config(page_title="Dashboard V-Educa e INEP", layout="wide")
     st.title("Dashboard Dinamico - V-Educa e INEP")
@@ -907,23 +995,21 @@ def main() -> None:
 
         # Filtros adicionais para essa aba
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            # Opção de métrica
-            metrica_mantenedora = st.selectbox(
-                "Selecione a métrica:",
-                options=[
-                    ("Matrículas", "QT_MAT"),
-                    ("Cursos", "QT_CURSO"),
-                    ("Ingressantes", "QT_ING"),
-                ],
-                format_func=lambda x: x[0],
+            metric_options = {
+                "Matriculas": "QT_MAT",
+                "Cursos": "QT_CURSO",
+                "Ingressantes": "QT_ING",
+            }
+            metrica_nome = st.selectbox(
+                "Selecione a metrica:",
+                options=list(metric_options.keys()),
                 key="mantenedora_metrica",
             )
-            metrica_col = metrica_mantenedora[1]
-        
+            metrica_col = metric_options[metrica_nome]
+
         with col2:
-            # Quantidade de mantenedoras a exibir
             top_n_mantenedoras = st.slider(
                 "Quantas mantenedoras exibir?",
                 min_value=5,
@@ -935,6 +1021,71 @@ def main() -> None:
 
         if "NO_MANTENEDORA" not in f_mantenedora.columns:
             st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
+            return
+
+        if metrica_col not in f_mantenedora.columns:
+            st.error(f"Metrica {metrica_col} nao disponivel nos dados.")
+            return
+
+        if "SG_UF" not in f_mantenedora.columns:
+            st.warning("Coluna SG_UF nao encontrada. Mapa do Brasil indisponivel para esta base.")
+            return
+
+        # Mapa do Brasil por UF: a selecao no mapa vira filtro da analise.
+        uf_map_values = (
+            f_mantenedora.dropna(subset=["SG_UF"])
+            .assign(SG_UF=lambda d: d["SG_UF"].astype("string").str.upper())
+            .groupby("SG_UF", as_index=False)[metrica_col]
+            .sum()
+        )
+
+        fig_map = render_uf_brazil_map(uf_map_values, metrica_col, inep_metric_label(metrica_col))
+
+        map_selected_ufs: list[str] = []
+        if fig_map is not None:
+            st.markdown("### Mapa do Brasil (filtro por UF)")
+            st.caption("Clique em um ou mais pontos do mapa para filtrar a analise por mantenedora.")
+            map_event: Any = st.plotly_chart(
+                fig_map,
+                use_container_width=True,
+                key="mantenedora_mapa_brasil",
+                on_select="rerun",
+            )
+
+            if isinstance(map_event, dict):
+                points = map_event.get("selection", {}).get("points", [])
+                for point in points:
+                    customdata = point.get("customdata") if isinstance(point, dict) else None
+                    if isinstance(customdata, (list, tuple)) and customdata:
+                        uf = str(customdata[0]).upper()
+                        if uf and uf != "NAN":
+                            map_selected_ufs.append(uf)
+            map_selected_ufs = sorted(set(map_selected_ufs))
+
+        uf_options = sorted(f_mantenedora["SG_UF"].dropna().astype("string").str.upper().unique().tolist())
+        default_ufs = map_selected_ufs if map_selected_ufs else uf_options
+
+        ufs_escolhidas = st.multiselect(
+            "UFs para analise da mantenedora",
+            options=uf_options,
+            default=default_ufs,
+            key="mantenedora_ufs",
+            help="A selecao feita no mapa preenche este filtro automaticamente.",
+        )
+
+        if map_selected_ufs:
+            st.caption("UFs selecionadas no mapa: " + ", ".join(map_selected_ufs))
+
+        if not ufs_escolhidas:
+            st.warning("Selecione ao menos uma UF para exibir o ranking de mantenedoras.")
+            return
+
+        f_mantenedora = f_mantenedora[
+            f_mantenedora["SG_UF"].astype("string").str.upper().isin(ufs_escolhidas)
+        ].copy()
+
+        if f_mantenedora.empty:
+            st.warning("Sem dados para as UFs selecionadas no mapa/filtro.")
             return
 
         # Agregar dados por mantenedora
@@ -951,7 +1102,7 @@ def main() -> None:
         if metrica_col in dados_mantenedora.columns:
             dados_mantenedora = dados_mantenedora.sort_values(by=metrica_col, ascending=False).head(top_n_mantenedoras)
         else:
-            st.error(f"Métrica {metrica_col} não disponível nos dados.")
+            st.error(f"Metrica {metrica_col} nao disponivel nos dados agregados.")
             return
 
         # Gráfico de ranking
