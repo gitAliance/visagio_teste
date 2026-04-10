@@ -4,6 +4,9 @@ from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
+import urllib.error
+import urllib.request
+import json
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -550,51 +553,125 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
     if map_df.empty:
         return None
 
-    map_df["lat"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][0])
-    map_df["lon"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][1])
     map_df["valor_fmt"] = map_df[metric_col].map(lambda v: f"{float(v):,.0f}".replace(",", "."))
 
-    fig = go.Figure(
-        go.Scattergeo(
-            lat=map_df["lat"],
-            lon=map_df["lon"],
-            mode="markers+text",
-            text=map_df["SG_UF"],
-            textposition="top center",
-            customdata=map_df[["SG_UF", metric_col, "valor_fmt"]],
-            marker=dict(
-                size=map_df[metric_col].fillna(0).clip(lower=0).pow(0.35) * 4 + 8,
-                color=map_df[metric_col],
-                colorscale="YlGnBu",
-                colorbar=dict(title=metric_txt),
-                line=dict(color="white", width=0.7),
-                sizemode="diameter",
-                opacity=0.88,
-            ),
+    # Preferencia: choropleth por estado preenchido (estilo mapa coroplético).
+    # Fallback: bolhas por UF caso o GeoJSON nao possa ser carregado.
+    try:
+        geojson_url = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
+        with urllib.request.urlopen(geojson_url, timeout=12) as response:
+            geojson_data = json.loads(response.read().decode("utf-8"))
+
+        choropleth = go.Choropleth(
+            geojson=geojson_data,
+            featureidkey="properties.sigla",
+            locations=map_df["SG_UF"],
+            z=map_df[metric_col],
+            colorscale=[
+                [0.0, "#fbf2ea"],
+                [0.2, "#f6dcc6"],
+                [0.4, "#f0bf99"],
+                [0.6, "#e69959"],
+                [0.8, "#d96d1d"],
+                [1.0, "#b65200"],
+            ],
+            marker_line_color="#9a9a9a",
+            marker_line_width=1.1,
+            colorbar=dict(title=metric_txt),
+            customdata=map_df[["SG_UF", "valor_fmt"]],
             hovertemplate=(
                 "<b>UF: %{customdata[0]}</b><br>"
                 + f"{metric_txt}: "
-                + "%{customdata[2]}<extra></extra>"
+                + "%{customdata[1]}<extra></extra>"
+            ),
+            showscale=True,
+            zmin=float(map_df[metric_col].min()),
+            zmax=float(map_df[metric_col].max()),
+        )
+        fig = go.Figure(choropleth)
+        label_df = map_df.copy()
+        label_df["lat"] = label_df["SG_UF"].map(lambda uf: UF_CENTROIDS.get(uf, (None, None))[0])
+        label_df["lon"] = label_df["SG_UF"].map(lambda uf: UF_CENTROIDS.get(uf, (None, None))[1])
+        label_df = label_df.dropna(subset=["lat", "lon"])
+        if not label_df.empty:
+            fig.add_trace(
+                go.Scattergeo(
+                    lat=label_df["lat"],
+                    lon=label_df["lon"],
+                    mode="text",
+                    text=label_df["SG_UF"],
+                    textfont=dict(size=11, color="#2f2f2f", family="Arial Black"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+        fig.update_geos(
+            fitbounds="locations",
+            visible=False,
+            showcoastlines=False,
+            showland=True,
+            landcolor="#f4f0ea",
+            bgcolor="rgba(0,0,0,0)",
+        )
+        fig.update_layout(
+            title=f"Mapa do Brasil por UF - {metric_txt}",
+            height=560,
+            margin=dict(l=10, r=20, t=70, b=10),
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            coloraxis_showscale=True,
+            geo=dict(
+                showframe=False,
+                showcountries=False,
+                showlakes=False,
+                showrivers=False,
             ),
         )
-    )
+        return fig
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
+        map_df["lat"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][0])
+        map_df["lon"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][1])
 
-    fig.update_layout(
-        title=f"Mapa do Brasil por UF - {metric_txt}",
-        height=560,
-        margin=dict(l=10, r=10, t=60, b=10),
-        geo=dict(
-            scope="south america",
-            center=dict(lat=-14.5, lon=-52),
-            projection_scale=4.2,
-            showland=True,
-            landcolor="#f5f5f5",
-            showcountries=True,
-            countrycolor="#7f7f7f",
-            coastlinecolor="#999999",
-        ),
-    )
-    return fig
+        fig = go.Figure(
+            go.Scattergeo(
+                lat=map_df["lat"],
+                lon=map_df["lon"],
+                mode="markers+text",
+                text=map_df["SG_UF"],
+                textposition="top center",
+                customdata=map_df[["SG_UF", metric_col, "valor_fmt"]],
+                marker=dict(
+                    size=map_df[metric_col].fillna(0).clip(lower=0).pow(0.35) * 4 + 8,
+                    color=map_df[metric_col],
+                    colorscale="YlGnBu",
+                    colorbar=dict(title=metric_txt),
+                    line=dict(color="white", width=0.7),
+                    sizemode="diameter",
+                    opacity=0.88,
+                ),
+                hovertemplate=(
+                    "<b>UF: %{customdata[0]}</b><br>"
+                    + f"{metric_txt}: "
+                    + "%{customdata[2]}<extra></extra>"
+                ),
+            )
+        )
+        fig.update_layout(
+            title=f"Mapa do Brasil por UF - {metric_txt}",
+            height=560,
+            margin=dict(l=10, r=10, t=60, b=10),
+            geo=dict(
+                scope="south america",
+                center=dict(lat=-14.5, lon=-52),
+                projection_scale=4.2,
+                showland=True,
+                landcolor="#f5f5f5",
+                showcountries=True,
+                countrycolor="#7f7f7f",
+                coastlinecolor="#999999",
+            ),
+        )
+        return fig
 
 
 def main() -> None:
@@ -985,53 +1062,60 @@ def main() -> None:
 
         f_mantenedora = df_inep.copy()
 
-        # Aplicar filtros dinâmicos existentes
-        for dim_col, selected_values in inep_dynamic_filters.items():
-            f_mantenedora = f_mantenedora[f_mantenedora[dim_col].isin(selected_values)]
-
-        if f_mantenedora.empty:
-            st.warning("Sem dados para os filtros selecionados na análise por mantenedora.")
-            return
-
-        # Filtros adicionais para essa aba
-        col1, col2 = st.columns(2)
+        # Filtros desta aba: mantenedora, tipo de curso e metrica.
+        col1, col2, col3 = st.columns(3)
 
         with col1:
+            mantenedora_options = options_for(f_mantenedora, "NO_MANTENEDORA") if "NO_MANTENEDORA" in f_mantenedora.columns else [TODOS]
+            mantenedora_selecionadas = st.multiselect(
+                "Mantenedora",
+                options=mantenedora_options,
+                default=[TODOS],
+                key="mantenedora_nome",
+            )
+
+        with col2:
+            if "NO_CINE_AREA_GERAL" in f_mantenedora.columns:
+                tipo_options = options_for(f_mantenedora, "NO_CINE_AREA_GERAL")
+                tipo_curso_selecionado = st.multiselect(
+                    "Tipo de curso (Área CINE)",
+                    options=tipo_options,
+                    default=[TODOS],
+                    key="mantenedora_tipo_curso",
+                )
+            else:
+                tipo_curso_selecionado = [TODOS]
+                st.info("Coluna NO_CINE_AREA_GERAL não encontrada para o filtro de tipo de curso.")
+
+        with col3:
             metric_options = {
-                "Matriculas": "QT_MAT",
-                "Cursos": "QT_CURSO",
                 "Ingressantes": "QT_ING",
+                "Matriculados": "QT_MAT",
+                "Quantidade de cursos": "QT_CURSO",
             }
             metrica_nome = st.selectbox(
-                "Selecione a metrica:",
+                "Métrica do mapa",
                 options=list(metric_options.keys()),
+                index=1,
                 key="mantenedora_metrica",
             )
             metrica_col = metric_options[metrica_nome]
-
-        with col2:
-            top_n_mantenedoras = st.slider(
-                "Quantas mantenedoras exibir?",
-                min_value=5,
-                max_value=50,
-                value=20,
-                step=5,
-                key="mantenedora_topn",
-            )
 
         if "NO_MANTENEDORA" not in f_mantenedora.columns:
             st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
             return
 
         if metrica_col not in f_mantenedora.columns:
-            st.error(f"Metrica {metrica_col} nao disponivel nos dados.")
+            st.error(f"Métrica {metrica_col} não disponível nos dados.")
             return
 
-        if "SG_UF" not in f_mantenedora.columns:
-            st.warning("Coluna SG_UF nao encontrada. Mapa do Brasil indisponivel para esta base.")
+        f_mantenedora = apply_filter(f_mantenedora, "NO_MANTENEDORA", mantenedora_selecionadas)
+        f_mantenedora = apply_filter(f_mantenedora, "NO_CINE_AREA_GERAL", tipo_curso_selecionado)
+
+        if f_mantenedora.empty:
+            st.warning("Sem dados para os filtros selecionados na análise por mantenedora.")
             return
 
-        # Mapa do Brasil por UF: a selecao no mapa vira filtro da analise.
         uf_map_values = (
             f_mantenedora.dropna(subset=["SG_UF"])
             .assign(SG_UF=lambda d: d["SG_UF"].astype("string").str.upper())
@@ -1039,149 +1123,20 @@ def main() -> None:
             .sum()
         )
 
+        if uf_map_values.empty:
+            st.warning("Sem dados por UF para gerar o mapa com os filtros selecionados.")
+            return
+
         fig_map = render_uf_brazil_map(uf_map_values, metrica_col, inep_metric_label(metrica_col))
-
-        map_selected_ufs: list[str] = []
-        if fig_map is not None:
-            st.markdown("### Mapa do Brasil (filtro por UF)")
-            st.caption("Clique em um ou mais pontos do mapa para filtrar a analise por mantenedora.")
-            map_event: Any = st.plotly_chart(
-                fig_map,
-                use_container_width=True,
-                key="mantenedora_mapa_brasil",
-                on_select="rerun",
-            )
-
-            if isinstance(map_event, dict):
-                points = map_event.get("selection", {}).get("points", [])
-                for point in points:
-                    customdata = point.get("customdata") if isinstance(point, dict) else None
-                    if isinstance(customdata, (list, tuple)) and customdata:
-                        uf = str(customdata[0]).upper()
-                        if uf and uf != "NAN":
-                            map_selected_ufs.append(uf)
-            map_selected_ufs = sorted(set(map_selected_ufs))
-
-        uf_options = sorted(f_mantenedora["SG_UF"].dropna().astype("string").str.upper().unique().tolist())
-        default_ufs = map_selected_ufs if map_selected_ufs else uf_options
-
-        ufs_escolhidas = st.multiselect(
-            "UFs para analise da mantenedora",
-            options=uf_options,
-            default=default_ufs,
-            key="mantenedora_ufs",
-            help="A selecao feita no mapa preenche este filtro automaticamente.",
-        )
-
-        if map_selected_ufs:
-            st.caption("UFs selecionadas no mapa: " + ", ".join(map_selected_ufs))
-
-        if not ufs_escolhidas:
-            st.warning("Selecione ao menos uma UF para exibir o ranking de mantenedoras.")
+        if fig_map is None:
+            st.warning("Não foi possível gerar o mapa com os filtros atuais.")
             return
 
-        f_mantenedora = f_mantenedora[
-            f_mantenedora["SG_UF"].astype("string").str.upper().isin(ufs_escolhidas)
-        ].copy()
-
-        if f_mantenedora.empty:
-            st.warning("Sem dados para as UFs selecionadas no mapa/filtro.")
-            return
-
-        # Agregar dados por mantenedora
-        dados_mantenedora = f_mantenedora.groupby("NO_MANTENEDORA", as_index=False).agg({
-            col: "sum" for col in ["QT_MAT", "QT_ING", "QT_CURSO"] if col in f_mantenedora.columns
-        }).dropna(subset=["NO_MANTENEDORA"])
-
-        # Converter para numérico
-        for col in ["QT_MAT", "QT_ING", "QT_CURSO"]:
-            if col in dados_mantenedora.columns:
-                dados_mantenedora[col] = pd.to_numeric(dados_mantenedora[col], errors="coerce").fillna(0)
-
-        # Ordenar e pegar top N
-        if metrica_col in dados_mantenedora.columns:
-            dados_mantenedora = dados_mantenedora.sort_values(by=metrica_col, ascending=False).head(top_n_mantenedoras)
-        else:
-            st.error(f"Metrica {metrica_col} nao disponivel nos dados agregados.")
-            return
-
-        # Gráfico de ranking
-        fig_mantenedora = go.Figure(data=[
-            go.Bar(
-                x=dados_mantenedora["NO_MANTENEDORA"],
-                y=dados_mantenedora[metrica_col],
-                marker_color="#2ca02c",
-                hovertemplate="<b>%{x}</b><br>" + inep_metric_label(metrica_col) + ": %{y:,.0f}<extra></extra>",
-            )
-        ])
-
-        fig_mantenedora.update_layout(
-            title=f"Top {len(dados_mantenedora)} Mantenedoras - {inep_metric_label(metrica_col)}",
-            xaxis_title="Mantenedora",
-            yaxis_title=inep_metric_label(metrica_col),
-            hovermode="x unified",
-            height=500,
-            margin=dict(b=100),
+        st.markdown("### Mapa do Brasil")
+        st.caption(
+            "Use os filtros acima para mudar a mantenedora, o tipo de curso e a métrica exibida no mapa."
         )
-        fig_mantenedora.update_xaxes(tickangle=-45)
-
-        st.plotly_chart(fig_mantenedora, use_container_width=True)
-
-        # Tabela com dados
-        st.subheader("Dados por Mantenedora")
-        
-        cols_exibir = ["NO_MANTENEDORA"]
-        # Adicionar apenas as colunas que ainda não estão na lista
-        for col in ["QT_MAT", "QT_ING", "QT_CURSO"]:
-            if col in dados_mantenedora.columns and col not in cols_exibir:
-                cols_exibir.append(col)
-        
-        tabela_exibicao = dados_mantenedora[cols_exibir].copy()
-        tabela_nomes = {
-            "NO_MANTENEDORA": "Mantenedora",
-            "QT_MAT": "Matriculados",
-            "QT_ING": "Ingressantes",
-            "QT_CURSO": "Cursos",
-        }
-        tabela_exibicao = tabela_exibicao.rename(columns=tabela_nomes)
-        
-        st.dataframe(
-            tabela_exibicao.style.format(
-                {col: "{:,.0f}" for col in tabela_exibicao.columns[1:]}
-            ),
-            use_container_width=True,
-        )
-
-        # Downloads
-        st.subheader("Exportação")
-        csv_mantenedora = dados_mantenedora.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="📥 Baixar CSV",
-            data=csv_mantenedora,
-            file_name=f"analise_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
-                     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
-
-        try:
-            png_bytes = fig_mantenedora.to_image(format="png", width=1600, height=900, scale=2)
-            st.download_button(
-                label="📥 Baixar Gráfico (PNG)",
-                data=png_bytes,
-                file_name=f"grafico_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
-                         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
-                mime="image/png",
-            )
-        except Exception as exc:
-            st.info(f"PNG não disponível neste ambiente: {exc}")
-            html_grafico = fig_mantenedora.to_html(full_html=True, include_plotlyjs="cdn")
-            st.download_button(
-                label="📥 Baixar Gráfico (HTML)",
-                data=html_grafico,
-                file_name=f"grafico_mantenedora_{inep_metric_label(metrica_col).lower().replace(' ', '_')}_"
-                         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-                mime="text/html",
-            )
+        st.plotly_chart(fig_map, use_container_width=True, key="mantenedora_mapa_brasil")
 
 
 if __name__ == "__main__":
