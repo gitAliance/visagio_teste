@@ -309,6 +309,8 @@ def metric_label(metric_col: str, mat_col: str, ing_col: str) -> str:
 
 
 def inep_metric_label(col: str) -> str:
+    if col == "__QTD_CURSOS__":
+        return "Quantidade de cursos"
     return INEP_COL_LABELS.get(col, col)
 
 
@@ -673,7 +675,6 @@ def render_uf_brazil_map(
             margin=dict(l=10, r=20, t=70, b=10),
             paper_bgcolor=paper_bg,
             plot_bgcolor=plot_bg,
-            coloraxis_showscale=True,
             template="plotly_dark" if theme_dark else "plotly_white",
             dragmode=False,
             geo=dict(
@@ -705,6 +706,91 @@ def render_uf_brazil_map(
             yaxis=dict(visible=False),
         )
         return fallback
+
+
+def render_top_uf_table(uf_values: pd.DataFrame, metric_col: str, metric_txt: str, limit: int = 10) -> pd.DataFrame:
+    if uf_values.empty or metric_col not in uf_values.columns or "SG_UF" not in uf_values.columns:
+        return pd.DataFrame(columns=["UF", metric_txt])
+
+    table_df = uf_values[["SG_UF", metric_col]].copy()
+    table_df["SG_UF"] = table_df["SG_UF"].astype("string").str.upper()
+    table_df[metric_col] = pd.to_numeric(table_df[metric_col], errors="coerce").fillna(0)
+    table_df = table_df[table_df["SG_UF"].notna() & (table_df["SG_UF"].str.strip() != "")]
+    table_df = table_df[table_df[metric_col] > 0]
+    table_df = table_df.sort_values(metric_col, ascending=False).head(limit)
+    table_df = table_df.rename(columns={"SG_UF": "UF", metric_col: metric_txt})
+    return table_df
+
+
+def aggregate_metric_by_uf(data: pd.DataFrame, metric_col: str) -> pd.DataFrame:
+    if data.empty or "SG_UF" not in data.columns:
+        return pd.DataFrame(columns=["SG_UF", metric_col])
+
+    base = data.copy()
+    base["SG_UF"] = base["SG_UF"].astype("string").str.upper().str.strip()
+    # Mantem apenas siglas validas de UF (2 letras).
+    base = base[base["SG_UF"].str.match(r"^[A-Z]{2}$", na=False)]
+
+    # Metricas derivadas que nao dependem de coluna pronta na base.
+    if metric_col == "__QTD_CURSOS__":
+        if "CO_CURSO" in base.columns:
+            grouped = base.groupby("SG_UF", as_index=False)["CO_CURSO"].nunique()
+            grouped = grouped.rename(columns={"CO_CURSO": metric_col})
+        else:
+            grouped = base.groupby("SG_UF", as_index=False).size().rename(columns={"size": metric_col})
+    else:
+        if metric_col not in base.columns:
+            return pd.DataFrame(columns=["SG_UF", metric_col])
+
+        # Garante agregacao numerica consistente nas metricas mais usadas.
+        for col in ["QT_ING", "QT_MAT", metric_col]:
+            if col in base.columns:
+                base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0)
+
+        grouped = base.groupby("SG_UF", as_index=False)[metric_col].sum()
+
+    grouped = grouped[grouped[metric_col] > 0]
+    return grouped.sort_values(metric_col, ascending=False)
+
+
+def render_top_uf_inset(uf_values: pd.DataFrame, metric_col: str, metric_txt: str, limit: int = 10) -> go.Figure:
+    table_df = render_top_uf_table(uf_values, metric_col, metric_txt, limit=limit)
+    fig = go.Figure()
+    if table_df.empty:
+        fig.add_annotation(
+            text="Sem dados",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=11, color="#cccccc"),
+        )
+    else:
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=["UF", metric_txt],
+                    fill_color="#202124",
+                    font=dict(color="white", size=11),
+                    align="left",
+                    height=22,
+                ),
+                cells=dict(
+                    values=[table_df["UF"], table_df[metric_txt].map(lambda v: f"{float(v):,.0f}".replace(",", "."))],
+                    fill_color="#111318",
+                    font=dict(color="white", size=10),
+                    align="left",
+                    height=20,
+                ),
+            )
+        )
+    fig.update_layout(
+        height=220,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
 
 
 def main() -> None:
@@ -1027,13 +1113,10 @@ def main() -> None:
             metric_total = float(pd.to_numeric(f_inep[inep_metric], errors="coerce").fillna(0).sum())
             mat_total = float(pd.to_numeric(f_inep["QT_MAT"], errors="coerce").fillna(0).sum()) if "QT_MAT" in f_inep.columns else 0.0
             ing_total = float(pd.to_numeric(f_inep["QT_ING"], errors="coerce").fillna(0).sum()) if "QT_ING" in f_inep.columns else 0.0
-            cursos_total = float(pd.to_numeric(f_inep["QT_CURSO"], errors="coerce").fillna(0).sum()) if "QT_CURSO" in f_inep.columns else 0.0
-
-            k1, k2, k3, k4 = st.columns(4)
+            k1, k2, k3 = st.columns(3)
             k1.metric("Registros", f"{len(f_inep):,}".replace(",", "."))
             k2.metric(inep_metric_label(inep_metric), f"{metric_total:,.0f}".replace(",", "."))
             k3.metric("Matriculados", f"{mat_total:,.0f}".replace(",", "."))
-            k4.metric("Cursos", f"{cursos_total:,.0f}".replace(",", "."))
 
         with inep_tabs[1]:
             if "QT_MAT" not in f_inep.columns or "QT_ING" not in f_inep.columns:
@@ -1124,7 +1207,7 @@ def main() -> None:
             metric_options = {
                 "Ingressantes": "QT_ING",
                 "Matriculados": "QT_MAT",
-                "Quantidade de cursos": "QT_CURSO",
+                "Quantidade de cursos": "__QTD_CURSOS__",
             }
             metrica_nome = st.selectbox(
                 "Métrica do mapa",
@@ -1138,7 +1221,7 @@ def main() -> None:
             st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
             return
 
-        if metrica_col not in f_mantenedora.columns:
+        if metrica_col != "__QTD_CURSOS__" and metrica_col not in f_mantenedora.columns:
             st.error(f"Métrica {metrica_col} não disponível nos dados.")
             return
 
@@ -1152,7 +1235,7 @@ def main() -> None:
         def subset_for_modalidade(df: pd.DataFrame, modalidade: str) -> pd.DataFrame:
             base = df.copy()
             if "TP_MODALIDADE_ENSINO" in base.columns:
-                modalidade_raw = base["TP_MODALIDADE_ENSINO"].astype("string")
+                modalidade_raw = base["TP_MODALIDADE_ENSINO"].astype("string").str.upper().str.strip()
                 modalidade_num = pd.to_numeric(base["TP_MODALIDADE_ENSINO"], errors="coerce")
             else:
                 modalidade_raw = pd.Series("", index=base.index, dtype="string")
@@ -1162,17 +1245,17 @@ def main() -> None:
                 return base
             if modalidade == "EAD":
                 if "TP_MODALIDADE_ENSINO" in base.columns:
-                    mask = (modalidade_num == 2) | modalidade_raw.str.contains("EAD|DIST", case=False, na=False)
+                    mask = (modalidade_num == 2) | modalidade_raw.isin(["2", "2.0", "EAD", "CURSO A DISTANCIA", "CURSO A DISTÂNCIA"])
                     return base[mask]
                 return base.iloc[0:0]
             if modalidade == "Presencial":
                 if "TP_MODALIDADE_ENSINO" in base.columns:
-                    mask = (modalidade_num == 1) | modalidade_raw.str.contains("PRESENC", case=False, na=False)
+                    mask = (modalidade_num == 1) | modalidade_raw.isin(["1", "1.0", "PRESENCIAL"])
                     return base[mask]
                 return base.iloc[0:0]
             if modalidade == "Semipresencial":
                 if "TP_MODALIDADE_ENSINO" in base.columns:
-                    mask = (modalidade_num == 3) | modalidade_raw.str.contains("SEMI", case=False, na=False)
+                    mask = (modalidade_num == 3) | modalidade_raw.isin(["3", "3.0", "SEMIPRESENCIAL", "SEMI-PRESENCIAL"])
                     return base[mask]
                 if "NO_CINE_ROTULO" in base.columns:
                     semi_mask = base["NO_CINE_ROTULO"].astype("string").str.contains("SEMI", case=False, na=False)
@@ -1235,15 +1318,10 @@ def main() -> None:
             row = rows[idx // 2]
             subset = subset_for_modalidade(f_mantenedora, config["label"])
 
-            if metrica_col in subset.columns:
+            if metrica_col != "__QTD_CURSOS__" and metrica_col in subset.columns:
                 subset[metrica_col] = pd.to_numeric(subset[metrica_col], errors="coerce").fillna(0)
 
-            uf_map_values = (
-                subset.dropna(subset=["SG_UF"])
-                .assign(SG_UF=lambda d: d["SG_UF"].astype("string").str.upper())
-                .groupby("SG_UF", as_index=False)[metrica_col]
-                .sum()
-            )
+            uf_map_values = aggregate_metric_by_uf(subset, metrica_col)
 
             fig_map = render_uf_brazil_map(
                 uf_map_values,
@@ -1255,22 +1333,31 @@ def main() -> None:
                 show_labels=True,
                 height=430,
             )
+            top_uf_inset = render_top_uf_inset(uf_map_values, metrica_col, inep_metric_label(metrica_col), limit=10)
 
             with row[idx % 2]:
                 st.markdown(f"#### {config['label']}")
                 st.caption(config["subtitle"])
-                st.plotly_chart(
-                    fig_map,
-                    use_container_width=True,
-                    key=f"mantenedora_{idx}",
-                    config={
-                        "displayModeBar": False,
-                        "scrollZoom": False,
-                        "doubleClick": False,
-                        "showTips": False,
-                        "staticPlot": True,
-                    },
-                )
+                map_col, inset_col = st.columns([4.0, 0.95], gap="small")
+                with map_col:
+                    st.plotly_chart(
+                        fig_map,
+                        use_container_width=True,
+                        key=f"mantenedora_{idx}",
+                        config={
+                            "displayModeBar": False,
+                            "scrollZoom": False,
+                            "doubleClick": False,
+                            "showTips": True,
+                        },
+                    )
+                with inset_col:
+                    st.plotly_chart(
+                        top_uf_inset,
+                        use_container_width=True,
+                        key=f"mantenedora_{idx}_inset",
+                        config={"displayModeBar": False, "staticPlot": True},
+                    )
 
 
 if __name__ == "__main__":
