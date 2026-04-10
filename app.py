@@ -548,9 +548,32 @@ def render_uf_brazil_map(
     metric_col: str,
     metric_txt: str,
     theme: str = "dark",
+    colorscale: list[list[object]] | None = None,
+    title: str | None = None,
+    show_labels: bool = True,
+    height: int = 460,
 ) -> go.Figure | None:
     if uf_values.empty:
-        return None
+        placeholder = go.Figure()
+        placeholder.add_annotation(
+            text="Sem dados para esta modalidade",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=16, color="#cfcfcf" if theme.lower() != "light" else "#444444"),
+        )
+        placeholder.update_layout(
+            title=title or f"Mapa do Brasil por UF - {metric_txt}",
+            height=height,
+            paper_bgcolor="rgba(0,0,0,0)" if theme.lower() != "light" else "white",
+            plot_bgcolor="rgba(0,0,0,0)" if theme.lower() != "light" else "white",
+            template="plotly_dark" if theme.lower() != "light" else "plotly_white",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+        )
+        return placeholder
 
     map_df = uf_values.copy()
     map_df["SG_UF"] = map_df["SG_UF"].astype("string").str.upper()
@@ -562,7 +585,7 @@ def render_uf_brazil_map(
 
     theme_dark = theme.lower() != "light"
     if theme_dark:
-        palette = [
+        default_palette = [
             [0.0, "#271a0f"],
             [0.2, "#5a3417"],
             [0.4, "#8a4a18"],
@@ -592,8 +615,9 @@ def render_uf_brazil_map(
         paper_bg = "white"
         plot_bg = "white"
 
-    # Preferencia: choropleth por estado preenchido (estilo mapa coroplético).
-    # Fallback: bolhas por UF caso o GeoJSON nao possa ser carregado.
+    palette = colorscale or default_palette
+
+    # Mapa do Brasil por estado (choropleth).
     try:
         geojson_url = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
         with urllib.request.urlopen(geojson_url, timeout=12) as response:
@@ -623,7 +647,7 @@ def render_uf_brazil_map(
         label_df["lat"] = label_df["SG_UF"].map(lambda uf: UF_CENTROIDS.get(uf, (None, None))[0])
         label_df["lon"] = label_df["SG_UF"].map(lambda uf: UF_CENTROIDS.get(uf, (None, None))[1])
         label_df = label_df.dropna(subset=["lat", "lon"])
-        if not label_df.empty:
+        if show_labels and not label_df.empty:
             fig.add_trace(
                 go.Scattergeo(
                     lat=label_df["lat"],
@@ -644,13 +668,14 @@ def render_uf_brazil_map(
             bgcolor=bg_color,
         )
         fig.update_layout(
-            title=f"Mapa do Brasil por UF - {metric_txt}",
-            height=560,
+            title=title or f"Mapa do Brasil por UF - {metric_txt}",
+            height=height,
             margin=dict(l=10, r=20, t=70, b=10),
             paper_bgcolor=paper_bg,
             plot_bgcolor=plot_bg,
             coloraxis_showscale=True,
             template="plotly_dark" if theme_dark else "plotly_white",
+            dragmode=False,
             geo=dict(
                 showframe=False,
                 showcountries=False,
@@ -660,53 +685,26 @@ def render_uf_brazil_map(
         )
         return fig
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
-        map_df["lat"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][0])
-        map_df["lon"] = map_df["SG_UF"].map(lambda uf: UF_CENTROIDS[uf][1])
-
-        fig = go.Figure(
-            go.Scattergeo(
-                lat=map_df["lat"],
-                lon=map_df["lon"],
-                mode="markers+text",
-                text=map_df["SG_UF"],
-                textposition="top center",
-                customdata=map_df[["SG_UF", metric_col, "valor_fmt"]],
-                marker=dict(
-                    size=map_df[metric_col].fillna(0).clip(lower=0).pow(0.35) * 4 + 8,
-                    color=map_df[metric_col],
-                    colorscale="YlGnBu",
-                    colorbar=dict(title=metric_txt),
-                    line=dict(color="white", width=0.7),
-                    sizemode="diameter",
-                    opacity=0.88,
-                ),
-                hovertemplate=(
-                    "<b>UF: %{customdata[0]}</b><br>"
-                    + f"{metric_txt}: "
-                    + "%{customdata[2]}<extra></extra>"
-                ),
-            )
+        fallback = go.Figure()
+        fallback.add_annotation(
+            text="Nao foi possivel carregar o mapa do Brasil agora. Verifique a conexao e tente novamente.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=15, color="#cfcfcf" if theme_dark else "#444444"),
         )
-        fig.update_layout(
-            title=f"Mapa do Brasil por UF - {metric_txt}",
-            height=560,
-            margin=dict(l=10, r=10, t=60, b=10),
+        fallback.update_layout(
+            title=title or f"Mapa do Brasil por UF - {metric_txt}",
+            height=height,
             paper_bgcolor=paper_bg,
             plot_bgcolor=plot_bg,
             template="plotly_dark" if theme_dark else "plotly_white",
-            geo=dict(
-                scope="south america",
-                center=dict(lat=-14.5, lon=-52),
-                projection_scale=4.2,
-                showland=True,
-                landcolor=land_color,
-                showcountries=True,
-                countrycolor=border_color,
-                coastlinecolor=border_color,
-                bgcolor=bg_color,
-            ),
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
         )
-        return fig
+        return fallback
 
 
 def main() -> None:
@@ -1098,7 +1096,7 @@ def main() -> None:
         f_mantenedora = df_inep.copy()
 
         # Filtros desta aba: mantenedora, tipo de curso e metrica.
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             mantenedora_options = options_for(f_mantenedora, "NO_MANTENEDORA") if "NO_MANTENEDORA" in f_mantenedora.columns else [TODOS]
@@ -1136,14 +1134,6 @@ def main() -> None:
             )
             metrica_col = metric_options[metrica_nome]
 
-        with col4:
-            map_theme = st.selectbox(
-                "Layout do mapa",
-                options=["Escuro", "Claro"],
-                index=0,
-                key="mantenedora_map_theme",
-            )
-
         if "NO_MANTENEDORA" not in f_mantenedora.columns:
             st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
             return
@@ -1159,32 +1149,128 @@ def main() -> None:
             st.warning("Sem dados para os filtros selecionados na análise por mantenedora.")
             return
 
-        uf_map_values = (
-            f_mantenedora.dropna(subset=["SG_UF"])
-            .assign(SG_UF=lambda d: d["SG_UF"].astype("string").str.upper())
-            .groupby("SG_UF", as_index=False)[metrica_col]
-            .sum()
-        )
+        def subset_for_modalidade(df: pd.DataFrame, modalidade: str) -> pd.DataFrame:
+            base = df.copy()
+            if "TP_MODALIDADE_ENSINO" in base.columns:
+                modalidade_raw = base["TP_MODALIDADE_ENSINO"].astype("string")
+                modalidade_num = pd.to_numeric(base["TP_MODALIDADE_ENSINO"], errors="coerce")
+            else:
+                modalidade_raw = pd.Series("", index=base.index, dtype="string")
+                modalidade_num = pd.Series(pd.NA, index=base.index, dtype="Float64")
 
-        if uf_map_values.empty:
-            st.warning("Sem dados por UF para gerar o mapa com os filtros selecionados.")
-            return
+            if modalidade == "Todas as modalidades":
+                return base
+            if modalidade == "EAD":
+                if "TP_MODALIDADE_ENSINO" in base.columns:
+                    mask = (modalidade_num == 2) | modalidade_raw.str.contains("EAD|DIST", case=False, na=False)
+                    return base[mask]
+                return base.iloc[0:0]
+            if modalidade == "Presencial":
+                if "TP_MODALIDADE_ENSINO" in base.columns:
+                    mask = (modalidade_num == 1) | modalidade_raw.str.contains("PRESENC", case=False, na=False)
+                    return base[mask]
+                return base.iloc[0:0]
+            if modalidade == "Semipresencial":
+                if "TP_MODALIDADE_ENSINO" in base.columns:
+                    mask = (modalidade_num == 3) | modalidade_raw.str.contains("SEMI", case=False, na=False)
+                    return base[mask]
+                if "NO_CINE_ROTULO" in base.columns:
+                    semi_mask = base["NO_CINE_ROTULO"].astype("string").str.contains("SEMI", case=False, na=False)
+                    return base[semi_mask]
+                return base.iloc[0:0]
+            return base.iloc[0:0]
 
-        fig_map = render_uf_brazil_map(
-            uf_map_values,
-            metrica_col,
-            inep_metric_label(metrica_col),
-            theme="dark" if map_theme == "Escuro" else "light",
-        )
-        if fig_map is None:
-            st.warning("Não foi possível gerar o mapa com os filtros atuais.")
-            return
+        modality_configs = [
+            {
+                "label": "Todas as modalidades",
+                "subtitle": "Visão geral",
+                "palette": [
+                    [0.0, "#1a1a1a"],
+                    [0.25, "#5c3a1e"],
+                    [0.5, "#9b5720"],
+                    [0.75, "#d07a28"],
+                    [1.0, "#ffb45d"],
+                ],
+            },
+            {
+                "label": "EAD",
+                "subtitle": "Somente cursos a distância",
+                "palette": [
+                    [0.0, "#06131f"],
+                    [0.25, "#0e3354"],
+                    [0.5, "#155f8d"],
+                    [0.75, "#2487c7"],
+                    [1.0, "#65bfff"],
+                ],
+            },
+            {
+                "label": "Presencial",
+                "subtitle": "Somente cursos presenciais",
+                "palette": [
+                    [0.0, "#0d1a10"],
+                    [0.25, "#1f4d2a"],
+                    [0.5, "#2f7a3d"],
+                    [0.75, "#49a65a"],
+                    [1.0, "#8be38d"],
+                ],
+            },
+            {
+                "label": "Semipresencial",
+                "subtitle": "Se houver registros na base",
+                "palette": [
+                    [0.0, "#1a1026"],
+                    [0.25, "#3b2458"],
+                    [0.5, "#65429a"],
+                    [0.75, "#8e69d4"],
+                    [1.0, "#c4a7ff"],
+                ],
+            },
+        ]
 
         st.markdown("### Mapa do Brasil")
-        st.caption(
-            "Use os filtros acima para mudar a mantenedora, o tipo de curso e a métrica exibida no mapa."
-        )
-        st.plotly_chart(fig_map, use_container_width=True, key="mantenedora_mapa_brasil")
+        st.caption("Os quatro painéis usam a mesma métrica e os mesmos filtros de mantenedora e tipo de curso.")
+
+        rows = [st.columns(2), st.columns(2)]
+        for idx, config in enumerate(modality_configs):
+            row = rows[idx // 2]
+            subset = subset_for_modalidade(f_mantenedora, config["label"])
+
+            if metrica_col in subset.columns:
+                subset[metrica_col] = pd.to_numeric(subset[metrica_col], errors="coerce").fillna(0)
+
+            uf_map_values = (
+                subset.dropna(subset=["SG_UF"])
+                .assign(SG_UF=lambda d: d["SG_UF"].astype("string").str.upper())
+                .groupby("SG_UF", as_index=False)[metrica_col]
+                .sum()
+            )
+
+            fig_map = render_uf_brazil_map(
+                uf_map_values,
+                metrica_col,
+                inep_metric_label(metrica_col),
+                theme="dark",
+                colorscale=config["palette"],
+                title=f"{config['label']} - {inep_metric_label(metrica_col)}",
+                show_labels=True,
+                height=430,
+            )
+
+            with row[idx % 2]:
+                st.markdown(f"#### {config['label']}")
+                st.caption(config["subtitle"])
+                st.plotly_chart(
+                    fig_map,
+                    use_container_width=True,
+                    key=f"mantenedora_{idx}",
+                    config={
+                        "displayModeBar": False,
+                        "scrollZoom": False,
+                        "doubleClick": False,
+                        "showTips": False,
+                        "staticPlot": True,
+                    },
+                )
 
 
 if __name__ == "__main__":
