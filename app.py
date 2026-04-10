@@ -543,7 +543,12 @@ def render_rank_chart(
     return fig
 
 
-def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: str) -> go.Figure | None:
+def render_uf_brazil_map(
+    uf_values: pd.DataFrame,
+    metric_col: str,
+    metric_txt: str,
+    theme: str = "dark",
+) -> go.Figure | None:
     if uf_values.empty:
         return None
 
@@ -554,6 +559,38 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
         return None
 
     map_df["valor_fmt"] = map_df[metric_col].map(lambda v: f"{float(v):,.0f}".replace(",", "."))
+
+    theme_dark = theme.lower() != "light"
+    if theme_dark:
+        palette = [
+            [0.0, "#271a0f"],
+            [0.2, "#5a3417"],
+            [0.4, "#8a4a18"],
+            [0.6, "#c5661e"],
+            [0.8, "#ea8f35"],
+            [1.0, "#ffb25f"],
+        ]
+        bg_color = "rgba(0,0,0,0)"
+        land_color = "#1e1e1e"
+        label_color = "#f3f3f3"
+        border_color = "#5f5f5f"
+        paper_bg = "rgba(0,0,0,0)"
+        plot_bg = "rgba(0,0,0,0)"
+    else:
+        palette = [
+            [0.0, "#fbf2ea"],
+            [0.2, "#f6dcc6"],
+            [0.4, "#f0bf99"],
+            [0.6, "#e69959"],
+            [0.8, "#d96d1d"],
+            [1.0, "#b65200"],
+        ]
+        bg_color = "rgba(0,0,0,0)"
+        land_color = "#f4f0ea"
+        label_color = "#2f2f2f"
+        border_color = "#9a9a9a"
+        paper_bg = "white"
+        plot_bg = "white"
 
     # Preferencia: choropleth por estado preenchido (estilo mapa coroplético).
     # Fallback: bolhas por UF caso o GeoJSON nao possa ser carregado.
@@ -567,15 +604,8 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
             featureidkey="properties.sigla",
             locations=map_df["SG_UF"],
             z=map_df[metric_col],
-            colorscale=[
-                [0.0, "#fbf2ea"],
-                [0.2, "#f6dcc6"],
-                [0.4, "#f0bf99"],
-                [0.6, "#e69959"],
-                [0.8, "#d96d1d"],
-                [1.0, "#b65200"],
-            ],
-            marker_line_color="#9a9a9a",
+            colorscale=palette,
+            marker_line_color=border_color,
             marker_line_width=1.1,
             colorbar=dict(title=metric_txt),
             customdata=map_df[["SG_UF", "valor_fmt"]],
@@ -600,7 +630,7 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
                     lon=label_df["lon"],
                     mode="text",
                     text=label_df["SG_UF"],
-                    textfont=dict(size=11, color="#2f2f2f", family="Arial Black"),
+                    textfont=dict(size=11, color=label_color, family="Arial Black"),
                     hoverinfo="skip",
                     showlegend=False,
                 )
@@ -610,16 +640,17 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
             visible=False,
             showcoastlines=False,
             showland=True,
-            landcolor="#f4f0ea",
-            bgcolor="rgba(0,0,0,0)",
+            landcolor=land_color,
+            bgcolor=bg_color,
         )
         fig.update_layout(
             title=f"Mapa do Brasil por UF - {metric_txt}",
             height=560,
             margin=dict(l=10, r=20, t=70, b=10),
-            paper_bgcolor="white",
-            plot_bgcolor="white",
+            paper_bgcolor=paper_bg,
+            plot_bgcolor=plot_bg,
             coloraxis_showscale=True,
+            template="plotly_dark" if theme_dark else "plotly_white",
             geo=dict(
                 showframe=False,
                 showcountries=False,
@@ -660,15 +691,19 @@ def render_uf_brazil_map(uf_values: pd.DataFrame, metric_col: str, metric_txt: s
             title=f"Mapa do Brasil por UF - {metric_txt}",
             height=560,
             margin=dict(l=10, r=10, t=60, b=10),
+            paper_bgcolor=paper_bg,
+            plot_bgcolor=plot_bg,
+            template="plotly_dark" if theme_dark else "plotly_white",
             geo=dict(
                 scope="south america",
                 center=dict(lat=-14.5, lon=-52),
                 projection_scale=4.2,
                 showland=True,
-                landcolor="#f5f5f5",
+                landcolor=land_color,
                 showcountries=True,
-                countrycolor="#7f7f7f",
-                coastlinecolor="#999999",
+                countrycolor=border_color,
+                coastlinecolor=border_color,
+                bgcolor=bg_color,
             ),
         )
         return fig
@@ -1063,7 +1098,7 @@ def main() -> None:
         f_mantenedora = df_inep.copy()
 
         # Filtros desta aba: mantenedora, tipo de curso e metrica.
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             mantenedora_options = options_for(f_mantenedora, "NO_MANTENEDORA") if "NO_MANTENEDORA" in f_mantenedora.columns else [TODOS]
@@ -1101,6 +1136,14 @@ def main() -> None:
             )
             metrica_col = metric_options[metrica_nome]
 
+        with col4:
+            map_theme = st.selectbox(
+                "Layout do mapa",
+                options=["Escuro", "Claro"],
+                index=0,
+                key="mantenedora_map_theme",
+            )
+
         if "NO_MANTENEDORA" not in f_mantenedora.columns:
             st.warning("Coluna NO_MANTENEDORA não encontrada nos dados.")
             return
@@ -1127,7 +1170,12 @@ def main() -> None:
             st.warning("Sem dados por UF para gerar o mapa com os filtros selecionados.")
             return
 
-        fig_map = render_uf_brazil_map(uf_map_values, metrica_col, inep_metric_label(metrica_col))
+        fig_map = render_uf_brazil_map(
+            uf_map_values,
+            metrica_col,
+            inep_metric_label(metrica_col),
+            theme="dark" if map_theme == "Escuro" else "light",
+        )
         if fig_map is None:
             st.warning("Não foi possível gerar o mapa com os filtros atuais.")
             return
